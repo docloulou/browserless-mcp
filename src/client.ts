@@ -212,7 +212,7 @@ export class BrowserlessClient {
 
       return {
         success: true,
-        data: this.decodeBody(response.data, response.headers['content-type']),
+        data: this.decodeBody(response.data, response.headers['content-type'] as string | undefined),
       };
     } catch (error) {
       return this.handleError(error);
