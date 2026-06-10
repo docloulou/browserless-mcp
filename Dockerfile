@@ -7,8 +7,9 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (incl. dev) needed to build.
+# --ignore-scripts avoids running `prepare` before the sources are copied.
+RUN npm ci --ignore-scripts
 
 # Copy source code
 COPY . .
@@ -29,10 +30,10 @@ RUN adduser -S nodejs -u 1001
 # Set working directory
 WORKDIR /app
 
-# Copy built application from builder stage
+# Copy built application from builder stage and install production deps only
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
-COPY --from=builder --chown=nodejs:nodejs /app/package*.json ./
-COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --chown=nodejs:nodejs package*.json ./
+RUN npm ci --omit=dev --ignore-scripts
 
 # Copy environment file template
 COPY --chown=nodejs:nodejs env.example .env.example

@@ -1,91 +1,61 @@
 # Browserless MCP Test Results
 
-## Connection Test ✅
-- **Browserless URL**: `http://172.22.0.1:3000`
-- **Status**: Connected successfully
-- **Authentication**: None required (token: null)
+Verified end-to-end against a **live Browserless v2 instance** (API `2.51.2`,
+Chromium `148.0.7778.96`) using [https://fill.dev/](https://fill.dev/).
 
-## Available Endpoints ✅
-- `/` - Root endpoint (HTML response)
-- `/docs` - OpenAPI documentation
-- `/metrics` - Performance metrics
-- `/sessions` - Active sessions
-- `/config` - Configuration
+Run the suites yourself:
 
-## Feature Tests
+```bash
+npm run build
+BROWSERLESS_URL=<your-url> BROWSERLESS_TOKEN=<your-token> node test-fill-dev.mjs     # client/API
+BROWSERLESS_URL=<your-url> BROWSERLESS_TOKEN=<your-token> node test-mcp-stdio.mjs    # MCP protocol
+```
 
-### ✅ Working Features
+## API / Client suite (`test-fill-dev.mjs`) — 11/11 ✅
 
-#### 1. Content Extraction
-- **Endpoint**: `/content`
-- **Status**: WORKING
-- **Test URL**: `https://httpbin.org/html`
-- **Response**: 3,737 characters of HTML content
-- **Sample File**: `sample-content.html`
+| Feature | Tool | Endpoint | Status |
+|---------|------|----------|--------|
+| Health + version | `get_health` | `GET /active` + `GET /meta` | ✅ |
+| Content extraction | `get_content` | `POST /content` | ✅ |
+| Selector scraping | `scrape` | `POST /scrape` | ✅ |
+| Function / **form autofill** | `execute_function` | `POST /function` | ✅ |
+| Screenshot | `take_screenshot` | `POST /screenshot` | ✅ |
+| PDF | `generate_pdf` | `POST /pdf` | ✅ |
+| Performance audit | `run_performance_audit` | `POST /performance` | ✅ |
+| Sessions | `get_sessions` | `GET /sessions` | ✅ |
+| Config | `get_config` | `GET /config` | ✅ |
+| Metrics | `get_metrics` | `GET /metrics` | ✅ |
+| WebSocket endpoint | `create_websocket_connection` | `ws /chromium` | ✅ |
 
-#### 2. PDF Generation
-- **Endpoint**: `/pdf`
-- **Status**: WORKING
-- **Test URL**: `https://httpbin.org/html`
-- **Response**: 47,023 bytes PDF file
-- **Sample File**: `sample-document.pdf`
+**Autofill highlight:** `execute_function` filled `#username` and `#password`
+on `https://fill.dev/form/login-simple` and read the values back successfully.
 
-### ❌ Non-Working Features
+## MCP protocol suite (`test-mcp-stdio.mjs`) ✅
 
-#### 3. Screenshots
-- **Endpoint**: `/screenshot`
-- **Status**: TIMEOUT
-- **Issue**: 30-second timeout exceeded
-- **Possible Cause**: Resource constraints or network issues
+- Auto-initialization from `BROWSERLESS_URL` / `BROWSERLESS_TOKEN`.
+- `tools/list` returns all 13 tools.
+- `get_health`, `get_content`, `take_screenshot` return valid MCP content
+  (screenshots use the `image` content type; PDFs/downloads are saved to disk).
 
-#### 4. Custom Functions
-- **Endpoint**: `/function`
-- **Status**: 400 ERROR
-- **Issue**: Bad request
-- **Possible Cause**: Function format or ES module support
+## What changed vs. the previous version
 
-#### 5. Page Export
-- **Endpoint**: `/export`
-- **Status**: 404 ERROR
-- **Issue**: Endpoint not found
-- **Possible Cause**: Not available in this Browserless instance
-
-#### 6. Performance Audit
-- **Endpoint**: `/performance`
-- **Status**: 404 ERROR
-- **Issue**: Endpoint not found
-- **Possible Cause**: Not available in this Browserless instance
-
-## Summary
-
-**Working Features**: 2/6 (33%)
-- Content extraction ✅
-- PDF generation ✅
-
-**Non-Working Features**: 4/6 (67%)
-- Screenshots ❌
-- Custom functions ❌
-- Page export ❌
-- Performance audit ❌
-
-## Recommendations
-
-1. **Use Working Features**: Focus on content extraction and PDF generation
-2. **MCP Server**: Create a simplified MCP server with only working features
-3. **Resource Allocation**: Consider allocating more resources to Browserless for screenshots
-4. **Feature Verification**: Check Browserless documentation for available endpoints
-
-## Next Steps
-
-1. Build the simplified MCP server with working features
-2. Test with MCP clients
-3. Share via Smithery
-4. Consider upgrading Browserless instance for additional features
-
-## Files Created
-
-- `sample-content.html` - Extracted HTML content
-- `sample-document.pdf` - Generated PDF document
-- `test-document.pdf` - Additional PDF test
-- `config.json` - Browserless configuration
-- `TEST_RESULTS.md` - This summary 
+- All REST calls migrated to the Browserless v2 endpoints (`/content`, `/pdf`,
+  `/screenshot`, `/function`, `/download`, `/scrape`, `/performance`).
+- `get_content` now reads the raw `text/html` response (was expecting JSON).
+- `execute_function` / `download_files` now send `application/json` `{ code, context }`
+  (was sending the object as `application/javascript`, causing 400 errors).
+- `get_health` uses `/active` + `/meta` (the old `/health` endpoint returns 404).
+- Binary outputs use the valid MCP `image`/`text` content types (was the
+  non-existent `binary` type) and are written to `BROWSERLESS_OUTPUT_DIR`.
+- Added the `scrape` tool.
+- Removed `export_page`, `unblock` and `execute_browserql` (not available on the
+  v2 chromium build — they return 404).
+- `initialize_browserless` accepts a full `url`, and the server auto-initializes
+  from environment variables.
+- Upgraded to `@modelcontextprotocol/sdk` **1.29.0** and migrated to the
+  high-level `McpServer` / `registerTool` API (automatic zod input validation,
+  tool titles and read-only annotations).
+- Dropped the unused `puppeteer` / `playwright` dependencies (the server talks to
+  Browserless over HTTP/WS) for a fast, lean `bunx` install.
+- Shipped a `browserless-mcp` binary (`bin` + shebang + `prepare` build) so it can
+  be run via `bunx github:<user>/<repo>`.

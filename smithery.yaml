@@ -29,6 +29,9 @@ mcp:
       inputSchema:
         type: object
         properties:
+          url:
+            type: string
+            description: Full base URL of the Browserless instance (overrides host/port/protocol)
           host:
             type: string
             default: localhost
@@ -47,7 +50,7 @@ mcp:
             description: Connection protocol
           timeout:
             type: number
-            default: 30000
+            default: 120000
             description: Request timeout in milliseconds
           concurrent:
             type: number
@@ -195,22 +198,34 @@ mcp:
             description: Additional context data
         required: [code]
 
-    - name: export_page
-      description: Export webpage with all resources
+    - name: scrape
+      description: Scrape text/html/attributes from a list of CSS selectors on a page
       inputSchema:
         type: object
         properties:
           url:
             type: string
-            description: URL to export
-          headers:
+            description: URL to scrape
+          html:
+            type: string
+            description: Raw HTML to scrape instead of a URL
+          elements:
+            type: array
+            items:
+              type: object
+              properties:
+                selector:
+                  type: string
+                  description: CSS selector to extract
+                timeout:
+                  type: number
+                  description: Timeout in milliseconds
+              required: [selector]
+          gotoOptions:
             type: object
             properties: {}
-            description: Custom headers
-          bestAttempt:
-            type: boolean
-            description: Best effort export
-        required: [url]
+            description: Options passed to page.goto (e.g. waitUntil)
+        required: [elements]
 
     - name: run_performance_audit
       description: Run Lighthouse performance audit
@@ -232,90 +247,28 @@ mcp:
                 description: Lighthouse settings
         required: [url]
 
-    - name: unblock
-      description: Bypass bot detection and anti-scraping measures
-      inputSchema:
-        type: object
-        properties:
-          url:
-            type: string
-            description: URL to unblock
-          content:
-            type: boolean
-            description: Return page content
-          screenshot:
-            type: boolean
-            description: Return screenshot
-          stealth:
-            type: boolean
-            description: Enable stealth mode
-          blockAds:
-            type: boolean
-            description: Block advertisements
-          headers:
-            type: object
-            properties: {}
-            description: Custom headers
-        required: [url]
-
-    - name: execute_browserql
-      description: Execute BrowserQL GraphQL queries for advanced automation
-      inputSchema:
-        type: object
-        properties:
-          query:
-            type: string
-            description: GraphQL query string
-          variables:
-            type: object
-            properties: {}
-            description: Query variables
-        required: [query]
-
     - name: create_websocket_connection
-      description: Create WebSocket connection for Puppeteer/Playwright
+      description: Build a WebSocket endpoint for connecting Puppeteer/Playwright to the browser
       inputSchema:
         type: object
         properties:
           browser:
             type: string
             enum: [chromium, firefox, webkit]
+            default: chromium
             description: Browser type
           library:
             type: string
             enum: [puppeteer, playwright]
+            default: puppeteer
             description: Automation library
-          stealth:
-            type: boolean
-            description: Enable stealth mode
           blockAds:
             type: boolean
             description: Block advertisements
-          viewport:
-            type: object
-            properties:
-              width:
-                type: number
-                description: Viewport width
-              height:
-                type: number
-                description: Viewport height
-              deviceScaleFactor:
-                type: number
-                description: Device scale factor
-              isMobile:
-                type: boolean
-                description: Mobile emulation
-              hasTouch:
-                type: boolean
-                description: Touch emulation
-          userAgent:
-            type: string
-            description: Custom user agent
-          extraHTTPHeaders:
+          launch:
             type: object
             properties: {}
-            description: Additional HTTP headers
+            description: Launch options forwarded to the browser
 
     - name: get_health
       description: Get health status of Browserless instance
@@ -422,8 +375,6 @@ metadata:
     - playwright
     - lighthouse
     - performance
-    - anti-detection
-    - graphql
     - websocket
   
   features:
@@ -431,11 +382,9 @@ metadata:
     - Screenshot capture (PNG, JPEG, WebP)
     - Content extraction with JavaScript execution
     - Custom function execution in browser context
+    - Selector-based scraping
     - File download handling
-    - Page export with resources
     - Lighthouse performance audits
-    - Bot detection bypass
-    - BrowserQL GraphQL queries
     - WebSocket connections for Puppeteer/Playwright
     - Health monitoring and metrics
     - Session management

@@ -1,12 +1,15 @@
 import { z } from 'zod';
 
 // Browserless configuration
+// Supports either a full base `url` (e.g. https://my-browserless.example.com)
+// or the classic host/port/protocol combination.
 export const BrowserlessConfigSchema = z.object({
+  url: z.string().optional(),
   host: z.string().default('localhost'),
   port: z.number().default(3000),
   token: z.string(),
   protocol: z.enum(['http', 'https', 'ws', 'wss']).default('http'),
-  timeout: z.number().default(30000),
+  timeout: z.number().default(120000),
   concurrent: z.number().default(5),
 });
 
@@ -47,7 +50,6 @@ export const ScreenshotOptionsSchema = z.object({
     width: z.number(),
     height: z.number(),
   }).optional(),
-  path: z.string().optional(),
 });
 
 export type ScreenshotOptions = z.infer<typeof ScreenshotOptionsSchema>;
@@ -68,6 +70,7 @@ export const CookieSchema = z.object({
   name: z.string(),
   value: z.string(),
   domain: z.string().optional(),
+  url: z.string().optional(),
   path: z.string().optional(),
   expires: z.number().optional(),
   httpOnly: z.boolean().optional(),
@@ -97,10 +100,13 @@ export type StyleTag = z.infer<typeof StyleTagSchema>;
 export const WaitForSelectorSchema = z.object({
   selector: z.string(),
   timeout: z.number().optional(),
+  visible: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 export const WaitForFunctionSchema = z.object({
   fn: z.string(),
+  polling: z.union([z.string(), z.number()]).optional(),
   timeout: z.number().optional(),
 });
 
@@ -108,6 +114,13 @@ export const WaitForEventSchema = z.object({
   event: z.string(),
   timeout: z.number().optional(),
 });
+
+// goto options (passed to puppeteer's page.goto)
+export const GotoOptionsSchema = z.object({
+  waitUntil: z.string().optional(),
+  timeout: z.number().optional(),
+  referer: z.string().optional(),
+}).passthrough();
 
 // PDF request schema
 export const PdfRequestSchema = z.object({
@@ -117,8 +130,10 @@ export const PdfRequestSchema = z.object({
   addScriptTag: z.array(ScriptTagSchema).optional(),
   addStyleTag: z.array(StyleTagSchema).optional(),
   cookies: z.array(CookieSchema).optional(),
-  headers: z.record(z.string()).optional(),
+  setExtraHTTPHeaders: z.record(z.string()).optional(),
   viewport: ViewportSchema.optional(),
+  emulateMediaType: z.string().optional(),
+  gotoOptions: GotoOptionsSchema.optional(),
   waitForEvent: WaitForEventSchema.optional(),
   waitForFunction: WaitForFunctionSchema.optional(),
   waitForSelector: WaitForSelectorSchema.optional(),
@@ -129,17 +144,18 @@ export type PdfRequest = z.infer<typeof PdfRequestSchema>;
 
 // Screenshot request schema
 export const ScreenshotRequestSchema = z.object({
-  url: z.string(),
+  url: z.string().optional(),
+  html: z.string().optional(),
   options: ScreenshotOptionsSchema.optional(),
+  selector: z.string().optional(),
+  scrollPage: z.boolean().optional(),
   addScriptTag: z.array(ScriptTagSchema).optional(),
   addStyleTag: z.array(StyleTagSchema).optional(),
   cookies: z.array(CookieSchema).optional(),
-  headers: z.record(z.string()).optional(),
+  setExtraHTTPHeaders: z.record(z.string()).optional(),
   viewport: ViewportSchema.optional(),
-  gotoOptions: z.object({
-    waitUntil: z.string().optional(),
-    timeout: z.number().optional(),
-  }).optional(),
+  emulateMediaType: z.string().optional(),
+  gotoOptions: GotoOptionsSchema.optional(),
   waitForSelector: WaitForSelectorSchema.optional(),
   waitForFunction: WaitForFunctionSchema.optional(),
   waitForTimeout: z.number().optional(),
@@ -149,23 +165,23 @@ export type ScreenshotRequest = z.infer<typeof ScreenshotRequestSchema>;
 
 // Content request schema
 export const ContentRequestSchema = z.object({
-  url: z.string(),
-  gotoOptions: z.object({
-    waitUntil: z.string().optional(),
-    timeout: z.number().optional(),
-  }).optional(),
+  url: z.string().optional(),
+  html: z.string().optional(),
+  gotoOptions: GotoOptionsSchema.optional(),
   waitForSelector: WaitForSelectorSchema.optional(),
   waitForFunction: WaitForFunctionSchema.optional(),
   waitForTimeout: z.number().optional(),
   addScriptTag: z.array(ScriptTagSchema).optional(),
-  headers: z.record(z.string()).optional(),
+  setExtraHTTPHeaders: z.record(z.string()).optional(),
   cookies: z.array(CookieSchema).optional(),
   viewport: ViewportSchema.optional(),
+  emulateMediaType: z.string().optional(),
+  bestAttempt: z.boolean().optional(),
 });
 
 export type ContentRequest = z.infer<typeof ContentRequestSchema>;
 
-// Function request schema
+// Function request schema (sent as application/json: { code, context })
 export const FunctionRequestSchema = z.object({
   code: z.string(),
   context: z.record(z.any()).optional(),
@@ -173,7 +189,7 @@ export const FunctionRequestSchema = z.object({
 
 export type FunctionRequest = z.infer<typeof FunctionRequestSchema>;
 
-// Download request schema
+// Download request schema (same shape as function)
 export const DownloadRequestSchema = z.object({
   code: z.string(),
   context: z.record(z.any()).optional(),
@@ -181,20 +197,30 @@ export const DownloadRequestSchema = z.object({
 
 export type DownloadRequest = z.infer<typeof DownloadRequestSchema>;
 
-// Export request schema
-export const ExportRequestSchema = z.object({
-  url: z.string(),
-  headers: z.record(z.string()).optional(),
-  gotoOptions: z.object({
-    waitUntil: z.string().optional(),
-    timeout: z.number().optional(),
-  }).optional(),
+// Scrape request schema
+export const ScrapeElementSchema = z.object({
+  selector: z.string(),
+  timeout: z.number().optional(),
+});
+
+export const ScrapeRequestSchema = z.object({
+  url: z.string().optional(),
+  html: z.string().optional(),
+  elements: z.array(ScrapeElementSchema),
+  gotoOptions: GotoOptionsSchema.optional(),
   waitForSelector: WaitForSelectorSchema.optional(),
   waitForTimeout: z.number().optional(),
+  debugOpts: z.object({
+    console: z.boolean().optional(),
+    cookies: z.boolean().optional(),
+    html: z.boolean().optional(),
+    network: z.boolean().optional(),
+    screenshot: z.boolean().optional(),
+  }).optional(),
   bestAttempt: z.boolean().optional(),
 });
 
-export type ExportRequest = z.infer<typeof ExportRequestSchema>;
+export type ScrapeRequest = z.infer<typeof ScrapeRequestSchema>;
 
 // Performance request schema
 export const PerformanceRequestSchema = z.object({
@@ -207,38 +233,12 @@ export const PerformanceRequestSchema = z.object({
 
 export type PerformanceRequest = z.infer<typeof PerformanceRequestSchema>;
 
-// Unblock request schema
-export const UnblockRequestSchema = z.object({
-  url: z.string(),
-  browserWSEndpoint: z.boolean().optional(),
-  cookies: z.boolean().optional(),
-  content: z.boolean().optional(),
-  screenshot: z.boolean().optional(),
-  ttl: z.number().optional(),
-  stealth: z.boolean().optional(),
-  blockAds: z.boolean().optional(),
-  headers: z.record(z.string()).optional(),
-});
-
-export type UnblockRequest = z.infer<typeof UnblockRequestSchema>;
-
-// BrowserQL query schema
-export const BrowserQLRequestSchema = z.object({
-  query: z.string(),
-  variables: z.record(z.any()).optional(),
-});
-
-export type BrowserQLRequest = z.infer<typeof BrowserQLRequestSchema>;
-
 // WebSocket connection options
 export const WebSocketOptionsSchema = z.object({
   browser: z.enum(['chromium', 'firefox', 'webkit']).default('chromium'),
   library: z.enum(['puppeteer', 'playwright']).default('puppeteer'),
-  stealth: z.boolean().optional(),
   blockAds: z.boolean().optional(),
-  viewport: ViewportSchema.optional(),
-  userAgent: z.string().optional(),
-  extraHTTPHeaders: z.record(z.string()).optional(),
+  launch: z.record(z.any()).optional(),
 });
 
 export type WebSocketOptions = z.infer<typeof WebSocketOptionsSchema>;
@@ -264,47 +264,30 @@ export interface ScreenshotResponse {
 
 export interface ContentResponse {
   html: string;
-  url: string;
-  title: string;
+  url?: string;
+  title?: string;
 }
 
+// The /function endpoint returns whatever the executed function returns.
+// We surface the raw payload alongside its content-type.
 export interface FunctionResponse {
-  result: any;
-  type: string;
+  contentType: string;
+  data: string; // utf-8 text for textual responses, base64 for binary
+  isBinary: boolean;
 }
 
 export interface DownloadResponse {
-  files: Array<{
-    name: string;
-    data: Buffer;
-    type: string;
-  }>;
+  data: Buffer;
+  contentType: string;
+  filename: string;
 }
 
-export interface ExportResponse {
-  html: string;
-  resources: Array<{
-    url: string;
-    data: Buffer;
-    type: string;
-  }>;
+export interface ScrapeResponse {
+  data: any;
 }
 
 export interface PerformanceResponse {
-  lighthouse: any;
-  metrics: any;
-}
-
-export interface UnblockResponse {
-  content?: string;
-  screenshot?: Buffer;
-  cookies?: Cookie[];
-  browserWSEndpoint?: string;
-}
-
-export interface BrowserQLResponse {
-  data: any;
-  errors?: any[];
+  [key: string]: any;
 }
 
 export interface WebSocketResponse {
@@ -312,30 +295,19 @@ export interface WebSocketResponse {
   sessionId: string;
 }
 
-// Session management
-export interface Session {
-  id: string;
-  browserWSEndpoint: string;
-  createdAt: Date;
-  lastActivity: Date;
-  status: 'active' | 'idle' | 'closed';
+// Browserless /meta payload
+export interface MetaResponse {
+  version: string;
+  chromium: string | null;
+  firefox: string | null;
+  webkit: string | null;
+  puppeteer: string[];
+  playwright: string[];
 }
 
-// Health check response
+// Health (derived from /active + /meta)
 export interface HealthResponse {
   status: 'healthy' | 'unhealthy';
-  uptime: number;
-  memory: {
-    used: number;
-    total: number;
-    percentage: number;
-  };
-  cpu: {
-    usage: number;
-    percentage: number;
-  };
-  sessions: {
-    active: number;
-    total: number;
-  };
-} 
+  active: boolean;
+  meta?: MetaResponse;
+}

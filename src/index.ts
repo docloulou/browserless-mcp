@@ -1,630 +1,360 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+#!/usr/bin/env node
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js';
-import { BrowserlessClient } from './client.js';
-import { BrowserlessConfigSchema } from './types.js';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
 import dotenv from 'dotenv';
+import { BrowserlessClient } from './client.js';
+import {
+  BrowserlessConfig,
+  BrowserlessConfigSchema,
+  PdfRequestSchema,
+  ScreenshotRequestSchema,
+  ContentRequestSchema,
+  FunctionRequestSchema,
+  DownloadRequestSchema,
+  ScrapeRequestSchema,
+  PerformanceRequestSchema,
+  WebSocketOptionsSchema,
+} from './types.js';
 
-// Load environment variables
 dotenv.config();
 
+const OUTPUT_DIR =
+  process.env.BROWSERLESS_OUTPUT_DIR || path.join(os.tmpdir(), 'browserless-mcp');
+
+type ToolResult = {
+  // Loosely typed to accommodate text/image content variants of CallToolResult.
+  content: any[];
+  isError?: boolean;
+};
+
 class BrowserlessMCPServer {
-  private server: Server;
+  private server: McpServer;
   private client: BrowserlessClient | null = null;
 
   constructor() {
-    this.server = new Server(
+    this.server = new McpServer({
+      name: 'browserless-mcp',
+      version: '2.0.0',
+    });
+
+    this.maybeInitFromEnv();
+    this.registerTools();
+  }
+
+  /**
+   * Auto-initialise the client from environment variables so the server is
+   * usable without an explicit `initialize_browserless` call.
+   */
+  private maybeInitFromEnv() {
+    const token = process.env.BROWSERLESS_TOKEN;
+    const url = process.env.BROWSERLESS_URL;
+    const host = process.env.BROWSERLESS_HOST;
+
+    if (!token || (!url && !host)) {
+      return;
+    }
+
+    try {
+      const config = BrowserlessConfigSchema.parse({
+        url: url || undefined,
+        host: host || undefined,
+        port: process.env.BROWSERLESS_PORT ? Number(process.env.BROWSERLESS_PORT) : undefined,
+        token,
+        protocol: process.env.BROWSERLESS_PROTOCOL || undefined,
+        timeout: process.env.BROWSERLESS_TIMEOUT ? Number(process.env.BROWSERLESS_TIMEOUT) : undefined,
+        concurrent: process.env.BROWSERLESS_CONCURRENT ? Number(process.env.BROWSERLESS_CONCURRENT) : undefined,
+      });
+      this.client = new BrowserlessClient(config);
+    } catch (error) {
+      console.error('Failed to auto-initialise Browserless client from env:', error);
+    }
+  }
+
+  private requireClient(): BrowserlessClient {
+    if (!this.client) {
+      throw new Error(
+        'Browserless client not initialized. Call "initialize_browserless" first, or set BROWSERLESS_URL/BROWSERLESS_TOKEN.'
+      );
+    }
+    return this.client;
+  }
+
+  private async saveOutput(filename: string, data: Buffer): Promise<string> {
+    await fs.mkdir(OUTPUT_DIR, { recursive: true });
+    const filePath = path.join(OUTPUT_DIR, filename);
+    await fs.writeFile(filePath, data);
+    return filePath;
+  }
+
+  private text(text: string) {
+    return { type: 'text' as const, text };
+  }
+
+  private async run(fn: () => Promise<ToolResult>): Promise<ToolResult> {
+    try {
+      return await fn();
+    } catch (error) {
+      return {
+        isError: true,
+        content: [this.text(`Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`)],
+      };
+    }
+  }
+
+  private registerTools() {
+    const ro = { readOnlyHint: true } as const;
+
+    this.server.registerTool(
+      'initialize_browserless',
       {
-        name: 'browserless-mcp',
-        version: '1.0.0',
-      }
+        title: 'Initialize Browserless',
+        description:
+          'Initialize connection to a Browserless instance. Provide either a full "url" (e.g. https://my-browserless.example.com) or host/port/protocol.',
+        inputSchema: BrowserlessConfigSchema.shape,
+      },
+      async (args) =>
+        this.run(async () => {
+          const config: BrowserlessConfig = BrowserlessConfigSchema.parse(args);
+          this.client = new BrowserlessClient(config);
+          const health = await this.client.getHealth();
+          const meta = health.data?.meta;
+          return {
+            content: [
+              this.text(
+                [
+                  `Browserless client initialized at ${this.client.getBaseUrl()}`,
+                  `Status: ${health.data?.status ?? 'unknown'}`,
+                  meta ? `API version: ${meta.version} | Chromium: ${meta.chromium ?? 'n/a'}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              ),
+            ],
+          };
+        })
     );
 
-    this.setupToolHandlers();
+    this.server.registerTool(
+      'generate_pdf',
+      {
+        title: 'Generate PDF',
+        description: 'Generate a PDF from a URL or raw HTML content (saved to disk)',
+        inputSchema: PdfRequestSchema.shape,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().generatePdf(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to generate PDF');
+          const filePath = await this.saveOutput(result.data.filename, result.data.pdf);
+          return { content: [this.text(`PDF generated (${result.data.pdf.length} bytes) and saved to: ${filePath}`)] };
+        })
+    );
+
+    this.server.registerTool(
+      'take_screenshot',
+      {
+        title: 'Take Screenshot',
+        description: 'Take a screenshot of a webpage (returned inline as an image and saved to disk)',
+        inputSchema: ScreenshotRequestSchema.shape,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().takeScreenshot(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to take screenshot');
+          const filePath = await this.saveOutput(result.data.filename, result.data.image);
+          return {
+            content: [
+              this.text(`Screenshot captured (${result.data.image.length} bytes) and saved to: ${filePath}`),
+              { type: 'image', mimeType: `image/${result.data.format}`, data: result.data.image.toString('base64') },
+            ],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'get_content',
+      {
+        title: 'Get Content',
+        description: 'Extract the rendered HTML content of a webpage after JavaScript execution',
+        inputSchema: ContentRequestSchema.shape,
+        annotations: ro,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().getContent(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to get content');
+          return {
+            content: [
+              this.text(
+                `Content extracted from ${result.data.url ?? 'HTML input'}${
+                  result.data.title ? ` (title: ${result.data.title})` : ''
+                }`
+              ),
+              this.text(result.data.html),
+            ],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'execute_function',
+      {
+        title: 'Execute Function',
+        description:
+          'Run custom puppeteer code in the browser. `code` is an ES module exporting a default async function, e.g. "export default async function ({ page }) { ... return { data, type } }".',
+        inputSchema: FunctionRequestSchema.shape,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().executeFunction(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to execute function');
+          const { contentType, data, isBinary } = result.data;
+          if (isBinary) {
+            if (contentType.startsWith('image/')) {
+              return {
+                content: [this.text(`Function returned an image (${contentType}).`), { type: 'image', mimeType: contentType, data }],
+              };
+            }
+            const filePath = await this.saveOutput(`function-${Date.now()}.bin`, Buffer.from(data, 'base64'));
+            return { content: [this.text(`Function returned binary data (${contentType}) saved to: ${filePath}`)] };
+          }
+          return { content: [this.text(`Function executed (${contentType}).`), this.text(data)] };
+        })
+    );
+
+    this.server.registerTool(
+      'scrape',
+      {
+        title: 'Scrape Selectors',
+        description: 'Scrape text/html/attributes from a list of CSS selectors on a page',
+        inputSchema: ScrapeRequestSchema.shape,
+        annotations: ro,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().scrape(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to scrape');
+          return {
+            content: [this.text('Scrape completed successfully.'), this.text(JSON.stringify(result.data.data, null, 2))],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'download_files',
+      {
+        title: 'Download Files',
+        description: 'Run puppeteer code and return any files Chromium downloaded during execution',
+        inputSchema: DownloadRequestSchema.shape,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().downloadFiles(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to download files');
+          const filePath = await this.saveOutput(result.data.filename, result.data.data);
+          return {
+            content: [
+              this.text(`Downloaded ${result.data.data.length} bytes (${result.data.contentType}) saved to: ${filePath}`),
+            ],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'run_performance_audit',
+      {
+        title: 'Run Performance Audit',
+        description: 'Run a Lighthouse performance audit on a URL',
+        inputSchema: PerformanceRequestSchema.shape,
+        annotations: ro,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().runPerformanceAudit(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to run performance audit');
+          return {
+            content: [this.text('Performance audit completed successfully.'), this.text(JSON.stringify(result.data, null, 2))],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'create_websocket_connection',
+      {
+        title: 'Create WebSocket Connection',
+        description: 'Build a WebSocket endpoint for connecting Puppeteer/Playwright to the browser',
+        inputSchema: WebSocketOptionsSchema.shape,
+        annotations: ro,
+      },
+      async (args) =>
+        this.run(async () => {
+          const result = await this.requireClient().createWebSocketConnection(args as any);
+          if (!result.success || !result.data) throw new Error(result.error || 'Failed to create WebSocket connection');
+          return {
+            content: [
+              this.text(`WebSocket session: ${result.data.sessionId}`),
+              this.text(`Browser WebSocket endpoint: ${result.data.browserWSEndpoint}`),
+            ],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'get_health',
+      { title: 'Get Health', description: 'Get liveness status and version metadata of the Browserless instance', inputSchema: {}, annotations: ro },
+      async () =>
+        this.run(async () => {
+          const result = await this.requireClient().getHealth();
+          return {
+            content: [this.text(`Health status: ${result.data?.status}`), this.text(JSON.stringify(result.data, null, 2))],
+          };
+        })
+    );
+
+    this.server.registerTool(
+      'get_sessions',
+      { title: 'Get Sessions', description: 'Get the list of active browser sessions', inputSchema: {}, annotations: ro },
+      async () =>
+        this.run(async () => {
+          const result = await this.requireClient().getSessions();
+          if (!result.success) throw new Error(result.error || 'Failed to get sessions');
+          const count = Array.isArray(result.data) ? result.data.length : 0;
+          return { content: [this.text(`Found ${count} active session(s).`), this.text(JSON.stringify(result.data, null, 2))] };
+        })
+    );
+
+    this.server.registerTool(
+      'get_config',
+      { title: 'Get Config', description: 'Get the runtime configuration of the Browserless instance', inputSchema: {}, annotations: ro },
+      async () =>
+        this.run(async () => {
+          const result = await this.requireClient().getConfig();
+          if (!result.success) throw new Error(result.error || 'Failed to get configuration');
+          return { content: [this.text('Current configuration:'), this.text(JSON.stringify(result.data, null, 2))] };
+        })
+    );
+
+    this.server.registerTool(
+      'get_metrics',
+      { title: 'Get Metrics', description: 'Get aggregated metrics of the Browserless instance', inputSchema: {}, annotations: ro },
+      async () =>
+        this.run(async () => {
+          const result = await this.requireClient().getMetrics();
+          if (!result.success) throw new Error(result.error || 'Failed to get metrics');
+          return { content: [this.text('Current metrics:'), this.text(JSON.stringify(result.data, null, 2))] };
+        })
+    );
   }
 
-  private setupToolHandlers() {
-    // Initialize Browserless client
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
-          {
-            name: 'initialize_browserless',
-            description: 'Initialize connection to Browserless instance',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                host: { type: 'string', default: 'localhost' },
-                port: { type: 'number', default: 3000 },
-                token: { type: 'string' },
-                protocol: { type: 'string', enum: ['http', 'https', 'ws', 'wss'], default: 'http' },
-                timeout: { type: 'number', default: 30000 },
-                concurrent: { type: 'number', default: 5 },
-              },
-              required: ['token'],
-            },
-          },
-          {
-            name: 'generate_pdf',
-            description: 'Generate PDF from URL or HTML content',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                html: { type: 'string' },
-                options: {
-                  type: 'object',
-                  properties: {
-                    displayHeaderFooter: { type: 'boolean' },
-                    printBackground: { type: 'boolean' },
-                    format: { type: 'string' },
-                    landscape: { type: 'boolean' },
-                    margin: {
-                      type: 'object',
-                      properties: {
-                        top: { type: 'string' },
-                        bottom: { type: 'string' },
-                        left: { type: 'string' },
-                        right: { type: 'string' },
-                      },
-                    },
-                  },
-                },
-              },
-              required: ['url'],
-            },
-          },
-          {
-            name: 'take_screenshot',
-            description: 'Take screenshot of a webpage',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                options: {
-                  type: 'object',
-                  properties: {
-                    type: { type: 'string', enum: ['png', 'jpeg', 'webp'] },
-                    quality: { type: 'number' },
-                    fullPage: { type: 'boolean' },
-                    omitBackground: { type: 'boolean' },
-                    clip: {
-                      type: 'object',
-                      properties: {
-                        x: { type: 'number' },
-                        y: { type: 'number' },
-                        width: { type: 'number' },
-                        height: { type: 'number' },
-                      },
-                    },
-                  },
-                },
-              },
-              required: ['url'],
-            },
-          },
-          {
-            name: 'get_content',
-            description: 'Extract rendered HTML content from a webpage',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                waitForSelector: {
-                  type: 'object',
-                  properties: {
-                    selector: { type: 'string' },
-                    timeout: { type: 'number' },
-                  },
-                },
-                waitForFunction: {
-                  type: 'object',
-                  properties: {
-                    fn: { type: 'string' },
-                    timeout: { type: 'number' },
-                  },
-                },
-              },
-              required: ['url'],
-            },
-          },
-          {
-            name: 'execute_function',
-            description: 'Execute custom JavaScript function in browser context',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                code: { type: 'string' },
-                context: { type: 'object' },
-              },
-              required: ['code'],
-            },
-          },
-          {
-            name: 'download_files',
-            description: 'Handle file downloads',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                code: { type: 'string' },
-                context: { type: 'object' },
-              },
-              required: ['code'],
-            },
-          },
-          {
-            name: 'export_page',
-            description: 'Export webpage with resources',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                headers: { type: 'object' },
-                bestAttempt: { type: 'boolean' },
-              },
-              required: ['url'],
-            },
-          },
-          {
-            name: 'run_performance_audit',
-            description: 'Run Lighthouse performance audit',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                config: {
-                  type: 'object',
-                  properties: {
-                    extends: { type: 'string' },
-                    settings: { type: 'object' },
-                  },
-                },
-              },
-              required: ['url'],
-            },
-          },
-          {
-            name: 'unblock',
-            description: 'Bypass bot detection and anti-scraping measures',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                url: { type: 'string' },
-                content: { type: 'boolean' },
-                screenshot: { type: 'boolean' },
-                stealth: { type: 'boolean' },
-                blockAds: { type: 'boolean' },
-                headers: { type: 'object' },
-              },
-              required: ['url'],
-            },
-          },
-          {
-            name: 'execute_browserql',
-            description: 'Execute BrowserQL GraphQL queries',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                query: { type: 'string' },
-                variables: { type: 'object' },
-              },
-              required: ['query'],
-            },
-          },
-          {
-            name: 'create_websocket_connection',
-            description: 'Create WebSocket connection for Puppeteer/Playwright',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                browser: { type: 'string', enum: ['chromium', 'firefox', 'webkit'] },
-                library: { type: 'string', enum: ['puppeteer', 'playwright'] },
-                stealth: { type: 'boolean' },
-                blockAds: { type: 'boolean' },
-                viewport: {
-                  type: 'object',
-                  properties: {
-                    width: { type: 'number' },
-                    height: { type: 'number' },
-                    deviceScaleFactor: { type: 'number' },
-                    isMobile: { type: 'boolean' },
-                    hasTouch: { type: 'boolean' },
-                  },
-                },
-                userAgent: { type: 'string' },
-                extraHTTPHeaders: { type: 'object' },
-              },
-            },
-          },
-          {
-            name: 'get_health',
-            description: 'Get health status of Browserless instance',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
-            name: 'get_sessions',
-            description: 'Get active sessions',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
-            name: 'get_config',
-            description: 'Get configuration',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
-            name: 'get_metrics',
-            description: 'Get metrics',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-        ] as Tool[],
-      };
-    });
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      if (!this.client && name !== 'initialize_browserless') {
-        throw new Error('Browserless client not initialized. Call initialize_browserless first.');
-      }
-
-      try {
-        switch (name) {
-          case 'initialize_browserless': {
-            const config = BrowserlessConfigSchema.parse(args);
-            this.client = new BrowserlessClient(config);
-            const health = await this.client.getHealth();
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Browserless client initialized successfully. Health status: ${health.data?.status || 'unknown'}`,
-                },
-              ],
-            };
-          }
-
-          case 'generate_pdf': {
-            const result = await this.client!.generatePdf(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `PDF generated successfully. Filename: ${result.data.filename}`,
-                  },
-                  {
-                    type: 'binary',
-                    mimeType: 'application/pdf',
-                    data: result.data.pdf.toString('base64'),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to generate PDF');
-            }
-          }
-
-          case 'take_screenshot': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.takeScreenshot(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Screenshot taken successfully. Filename: ${result.data.filename}`,
-                  },
-                  {
-                    type: 'binary',
-                    mimeType: `image/${result.data.format}`,
-                    data: result.data.image.toString('base64'),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to take screenshot');
-            }
-          }
-
-          case 'get_content': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.getContent(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Content extracted successfully from ${result.data.url}`,
-                  },
-                  {
-                    type: 'text',
-                    text: `Title: ${result.data.title}`,
-                  },
-                  {
-                    type: 'text',
-                    text: result.data.html,
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to get content');
-            }
-          }
-
-          case 'execute_function': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.executeFunction(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Function executed successfully. Result type: ${result.data.type}`,
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data.result, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to execute function');
-            }
-          }
-
-          case 'download_files': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.downloadFiles(args as any);
-            if (result.success && result.data) {
-              const content = [
-                {
-                  type: 'text',
-                  text: `Downloaded ${result.data.files.length} files successfully.`,
-                },
-              ];
-
-              for (const file of result.data.files) {
-                content.push({
-                  type: 'binary',
-                  mimeType: file.type,
-                  data: file.data.toString('base64'),
-                } as any);
-              }
-
-              return { content };
-            } else {
-              throw new Error(result.error || 'Failed to download files');
-            }
-          }
-
-          case 'export_page': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.exportPage(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Page exported successfully with ${result.data.resources.length} resources.`,
-                  },
-                  {
-                    type: 'text',
-                    text: result.data.html,
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to export page');
-            }
-          }
-
-          case 'run_performance_audit': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.runPerformanceAudit(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'Performance audit completed successfully.',
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to run performance audit');
-            }
-          }
-
-          case 'unblock': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.unblock(args as any);
-            if (result.success && result.data) {
-              const content = [
-                {
-                  type: 'text',
-                  text: 'Unblock operation completed successfully.',
-                },
-              ];
-
-              if (result.data.content) {
-                content.push({
-                  type: 'text',
-                  text: result.data.content,
-                });
-              }
-
-              if (result.data.screenshot) {
-                content.push({
-                  type: 'binary',
-                  mimeType: 'image/png',
-                  data: result.data.screenshot.toString('base64'),
-                } as any);
-              }
-
-              return { content };
-            } else {
-              throw new Error(result.error || 'Failed to unblock');
-            }
-          }
-
-          case 'execute_browserql': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.executeBrowserQL(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'BrowserQL query executed successfully.',
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to execute BrowserQL query');
-            }
-          }
-
-          case 'create_websocket_connection': {
-            if (!args) throw new Error('Arguments are required');
-            const result = await this.client!.createWebSocketConnection(args as any);
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `WebSocket connection created successfully. Session ID: ${result.data.sessionId}`,
-                  },
-                  {
-                    type: 'text',
-                    text: `Browser WebSocket endpoint: ${result.data.browserWSEndpoint}`,
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to create WebSocket connection');
-            }
-          }
-
-          case 'get_health': {
-            const result = await this.client!.getHealth();
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Health status: ${result.data.status}`,
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to get health status');
-            }
-          }
-
-          case 'get_sessions': {
-            const result = await this.client!.getSessions();
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Found ${result.data.length} active sessions.`,
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to get sessions');
-            }
-          }
-
-          case 'get_config': {
-            const result = await this.client!.getConfig();
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'Current configuration:',
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to get configuration');
-            }
-          }
-
-          case 'get_metrics': {
-            const result = await this.client!.getMetrics();
-            if (result.success && result.data) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'Current metrics:',
-                  },
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result.data, null, 2),
-                  },
-                ],
-              };
-            } else {
-              throw new Error(result.error || 'Failed to get metrics');
-            }
-          }
-
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-      } catch (error) {
-        throw new Error(`Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-    });
-  }
-
-  async run() {
+  async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error('Browserless MCP server started');
   }
 }
 
-// Start the server
 const server = new BrowserlessMCPServer();
-server.run().catch(console.error); 
+server.start().catch(console.error);

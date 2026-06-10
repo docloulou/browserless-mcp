@@ -4,26 +4,34 @@ export class BrowserlessClient {
     config;
     httpClient;
     baseUrl;
+    wsBaseUrl;
     constructor(config) {
         this.config = config;
-        this.baseUrl = `${this.config.protocol}://${this.config.host}:${this.config.port}`;
+        this.baseUrl = BrowserlessClient.resolveBaseUrl(config);
+        this.wsBaseUrl = this.baseUrl.replace(/^http/i, 'ws');
         this.httpClient = axios.create({
             baseURL: this.baseUrl,
             timeout: this.config.timeout,
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            // Browserless treats any 2xx (including 204) as success. 4xx/5xx should reject.
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
         });
-        // Add request interceptor to include token
-        this.httpClient.interceptors.request.use((config) => {
-            if (config.params) {
-                config.params.token = this.config.token;
-            }
-            else {
-                config.params = { token: this.config.token };
-            }
-            return config;
+        // Authenticate every request with the token as a query parameter.
+        this.httpClient.interceptors.request.use((cfg) => {
+            cfg.params = { ...(cfg.params || {}), token: this.config.token };
+            return cfg;
         });
+    }
+    /**
+     * Build the HTTP base URL from either an explicit `url` or host/port/protocol.
+     * A trailing slash is stripped so endpoint paths can be appended cleanly.
+     */
+    static resolveBaseUrl(config) {
+        if (config.url && config.url.trim().length > 0) {
+            return config.url.trim().replace(/\/+$/, '');
+        }
+        const protocol = config.protocol === 'ws' ? 'http' : config.protocol === 'wss' ? 'https' : config.protocol;
+        return `${protocol}://${config.host}:${config.port}`;
     }
     /**
      * Generate PDF from URL or HTML content
@@ -32,9 +40,7 @@ export class BrowserlessClient {
         try {
             const response = await this.httpClient.post('/pdf', request, {
                 responseType: 'arraybuffer',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
             });
             return {
                 success: true,
@@ -55,9 +61,7 @@ export class BrowserlessClient {
         try {
             const response = await this.httpClient.post('/screenshot', request, {
                 responseType: 'arraybuffer',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
             });
             const format = request.options?.type || 'png';
             const filename = `screenshot-${Date.now()}.${format}`;
@@ -75,14 +79,24 @@ export class BrowserlessClient {
         }
     }
     /**
-     * Extract rendered HTML content from a webpage
+     * Extract rendered HTML content from a webpage.
+     * The /content endpoint returns raw HTML (text/html), not JSON.
      */
     async getContent(request) {
         try {
-            const response = await this.httpClient.post('/content', request);
+            const response = await this.httpClient.post('/content', request, {
+                responseType: 'text',
+                headers: { 'Content-Type': 'application/json' },
+            });
+            const html = typeof response.data === 'string' ? response.data : String(response.data);
+            const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
             return {
                 success: true,
-                data: response.data,
+                data: {
+                    html,
+                    url: request.url,
+                    title: titleMatch ? titleMatch[1].trim() : undefined,
+                },
             };
         }
         catch (error) {
@@ -90,18 +104,19 @@ export class BrowserlessClient {
         }
     }
     /**
-     * Execute custom JavaScript function in browser context
+     * Execute custom JavaScript (puppeteer) code in the browser context.
+     * The body must be JSON: { code, context }. The response is whatever the
+     * function returns, so we decode it based on its content-type.
      */
     async executeFunction(request) {
         try {
             const response = await this.httpClient.post('/function', request, {
-                headers: {
-                    'Content-Type': 'application/javascript',
-                },
+                responseType: 'arraybuffer',
+                headers: { 'Content-Type': 'application/json' },
             });
             return {
                 success: true,
-                data: response.data,
+                data: this.decodeBody(response.data, response.headers['content-type']),
             };
         }
         catch (error) {
@@ -109,14 +124,53 @@ export class BrowserlessClient {
         }
     }
     /**
-     * Handle file downloads
+     * Run puppeteer code and return any files Chromium downloaded during execution.
+     * Body is JSON: { code, context }. The response is the downloaded file(s).
      */
     async downloadFiles(request) {
         try {
             const response = await this.httpClient.post('/download', request, {
-                headers: {
-                    'Content-Type': 'application/javascript',
+                responseType: 'arraybuffer',
+                headers: { 'Content-Type': 'application/json' },
+            });
+            const contentType = response.headers['content-type'] || 'application/octet-stream';
+            return {
+                success: true,
+                data: {
+                    data: Buffer.from(response.data),
+                    contentType,
+                    filename: `download-${Date.now()}${this.extensionForContentType(contentType)}`,
                 },
+            };
+        }
+        catch (error) {
+            return this.handleError(error);
+        }
+    }
+    /**
+     * Scrape text/html/attributes from a list of selectors on a page.
+     */
+    async scrape(request) {
+        try {
+            const response = await this.httpClient.post('/scrape', request, {
+                headers: { 'Content-Type': 'application/json' },
+            });
+            return {
+                success: true,
+                data: { data: response.data },
+            };
+        }
+        catch (error) {
+            return this.handleError(error);
+        }
+    }
+    /**
+     * Run a Lighthouse performance audit
+     */
+    async runPerformanceAudit(request) {
+        try {
+            const response = await this.httpClient.post('/performance', request, {
+                headers: { 'Content-Type': 'application/json' },
             });
             return {
                 success: true,
@@ -128,83 +182,24 @@ export class BrowserlessClient {
         }
     }
     /**
-     * Export webpage with resources
-     */
-    async exportPage(request) {
-        try {
-            const response = await this.httpClient.post('/export', request);
-            return {
-                success: true,
-                data: response.data,
-            };
-        }
-        catch (error) {
-            return this.handleError(error);
-        }
-    }
-    /**
-     * Run Lighthouse performance audit
-     */
-    async runPerformanceAudit(request) {
-        try {
-            const response = await this.httpClient.post('/performance', request);
-            return {
-                success: true,
-                data: response.data,
-            };
-        }
-        catch (error) {
-            return this.handleError(error);
-        }
-    }
-    /**
-     * Bypass bot detection and anti-scraping measures
-     */
-    async unblock(request) {
-        try {
-            const response = await this.httpClient.post('/unblock', request);
-            return {
-                success: true,
-                data: response.data,
-            };
-        }
-        catch (error) {
-            return this.handleError(error);
-        }
-    }
-    /**
-     * Execute BrowserQL GraphQL queries
-     */
-    async executeBrowserQL(request) {
-        try {
-            const response = await this.httpClient.post('/chromium/bql', request);
-            return {
-                success: true,
-                data: response.data,
-            };
-        }
-        catch (error) {
-            return this.handleError(error);
-        }
-    }
-    /**
-     * Create WebSocket connection for Puppeteer/Playwright
+     * Build (and verify) a WebSocket endpoint for Puppeteer/Playwright connections.
      */
     async createWebSocketConnection(options = { browser: 'chromium', library: 'puppeteer' }) {
         try {
             const { browser, library } = options;
-            let endpoint;
-            if (library === 'puppeteer') {
-                endpoint = `ws://${this.config.host}:${this.config.port}?token=${this.config.token}`;
-            }
-            else {
-                // Playwright
-                endpoint = `ws://${this.config.host}:${this.config.port}/${browser}/playwright?token=${this.config.token}`;
-            }
-            // Test the connection
+            const path = library === 'playwright' ? `/${browser}/playwright` : `/${browser}`;
+            const endpoint = `${this.wsBaseUrl}${path}?token=${encodeURIComponent(this.config.token)}`;
             const ws = new WebSocket(endpoint);
-            return new Promise((resolve) => {
+            return await new Promise((resolve) => {
+                const timer = setTimeout(() => {
+                    try {
+                        ws.terminate();
+                    }
+                    catch { /* noop */ }
+                    resolve({ success: false, error: 'WebSocket connection timed out' });
+                }, Math.min(this.config.timeout, 15000));
                 ws.on('open', () => {
+                    clearTimeout(timer);
                     ws.close();
                     resolve({
                         success: true,
@@ -215,6 +210,7 @@ export class BrowserlessClient {
                     });
                 });
                 ws.on('error', (error) => {
+                    clearTimeout(timer);
                     resolve({
                         success: false,
                         error: `WebSocket connection failed: ${error.message}`,
@@ -227,73 +223,146 @@ export class BrowserlessClient {
         }
     }
     /**
-     * Get health status of Browserless instance
+     * Liveness probe. /active returns 204 when the service is up.
      */
-    async getHealth() {
+    async getActive() {
         try {
-            const response = await this.httpClient.get('/health');
-            return {
-                success: true,
-                data: response.data,
-            };
+            const response = await this.httpClient.get('/active', {
+                validateStatus: (status) => status >= 200 && status < 300,
+            });
+            return response.status >= 200 && response.status < 300;
+        }
+        catch {
+            return false;
+        }
+    }
+    /**
+     * System versions (core API version, browser versions, ...).
+     */
+    async getMeta() {
+        try {
+            const response = await this.httpClient.get('/meta');
+            return { success: true, data: response.data };
         }
         catch (error) {
             return this.handleError(error);
         }
     }
     /**
-     * Get active sessions
+     * Combined health: liveness (/active) + version metadata (/meta).
+     */
+    async getHealth() {
+        const active = await this.getActive();
+        const meta = await this.getMeta();
+        return {
+            success: true,
+            data: {
+                status: active ? 'healthy' : 'unhealthy',
+                active,
+                meta: meta.success ? meta.data : undefined,
+            },
+        };
+    }
+    /**
+     * Active sessions
      */
     async getSessions() {
         try {
             const response = await this.httpClient.get('/sessions');
-            return {
-                success: true,
-                data: response.data,
-            };
+            return { success: true, data: response.data };
         }
         catch (error) {
             return this.handleError(error);
         }
     }
     /**
-     * Get configuration
+     * Runtime configuration
      */
     async getConfig() {
         try {
             const response = await this.httpClient.get('/config');
-            return {
-                success: true,
-                data: response.data,
-            };
+            return { success: true, data: response.data };
         }
         catch (error) {
             return this.handleError(error);
         }
     }
     /**
-     * Get metrics
+     * Aggregated metrics
      */
     async getMetrics() {
         try {
             const response = await this.httpClient.get('/metrics');
-            return {
-                success: true,
-                data: response.data,
-            };
+            return { success: true, data: response.data };
         }
         catch (error) {
             return this.handleError(error);
         }
+    }
+    /**
+     * Decode an arraybuffer response into a string (text) or base64 (binary)
+     * based on the content-type header.
+     */
+    decodeBody(data, contentTypeHeader) {
+        const buffer = Buffer.from(data);
+        const contentType = (contentTypeHeader || 'application/octet-stream').toLowerCase();
+        const isText = contentType.includes('json') ||
+            contentType.includes('text') ||
+            contentType.includes('html') ||
+            contentType.includes('xml') ||
+            contentType.includes('javascript') ||
+            contentType.includes('csv') ||
+            contentType.includes('svg') ||
+            contentType.includes('urlencoded');
+        if (isText) {
+            return { contentType, data: buffer.toString('utf-8'), isBinary: false };
+        }
+        return { contentType, data: buffer.toString('base64'), isBinary: true };
+    }
+    extensionForContentType(contentType) {
+        const ct = contentType.toLowerCase();
+        if (ct.includes('pdf'))
+            return '.pdf';
+        if (ct.includes('zip'))
+            return '.zip';
+        if (ct.includes('png'))
+            return '.png';
+        if (ct.includes('jpeg') || ct.includes('jpg'))
+            return '.jpg';
+        if (ct.includes('csv'))
+            return '.csv';
+        if (ct.includes('json'))
+            return '.json';
+        if (ct.includes('html'))
+            return '.html';
+        if (ct.includes('plain'))
+            return '.txt';
+        return '.bin';
     }
     /**
      * Handle errors from API calls
      */
     handleError(error) {
         if (axios.isAxiosError(error)) {
+            let message = error.message;
+            const data = error.response?.data;
+            if (data) {
+                if (typeof data === 'string') {
+                    message = data;
+                }
+                else if (Buffer.isBuffer(data)) {
+                    message = data.toString('utf-8') || message;
+                }
+                else if (data instanceof ArrayBuffer) {
+                    message = Buffer.from(data).toString('utf-8') || message;
+                }
+                else if (typeof data === 'object') {
+                    message = data.message || data.error || JSON.stringify(data);
+                }
+            }
             return {
                 success: false,
-                error: error.response?.data?.message || error.message,
+                error: message,
                 statusCode: error.response?.status,
             };
         }

@@ -1,21 +1,23 @@
 # Browserless MCP Server
 
-A Model Context Protocol (MCP) server for Browserless.io browser automation. This server provides a comprehensive interface to Browserless's powerful browser automation capabilities through MCP tools.
+A Model Context Protocol (MCP) server for [Browserless](https://browserless.io/) browser automation. This server provides an interface to Browserless's browser automation capabilities through MCP tools.
+
+> **Compatibility:** This server targets the **Browserless v2** REST API (the `/chromium/*` endpoints and their `/content`, `/pdf`, ... backwards-compatible aliases). It has been verified end-to-end against a live instance using [fill.dev](https://fill.dev/).
 
 ## Features
 
 - **PDF Generation**: Convert web pages or HTML content to PDF with custom styling
-- **Screenshots**: Capture full-page or element-specific screenshots
+- **Screenshots**: Capture full-page or element-specific screenshots (returned inline + saved to disk)
 - **Content Extraction**: Get rendered HTML content after JavaScript execution
-- **Custom Functions**: Execute JavaScript code in browser context
-- **File Downloads**: Handle file downloads and programmatic file creation
-- **Page Export**: Export web pages with all resources
+- **Custom Functions**: Execute Puppeteer code in browser context (e.g. fill forms, scrape data)
+- **Scraping**: Extract text/html/attributes from a list of CSS selectors
+- **File Downloads**: Return files Chromium downloaded during a function run
 - **Performance Audits**: Run Lighthouse performance audits
-- **Anti-Detection**: Bypass bot detection and anti-scraping measures
-- **BrowserQL**: Execute GraphQL queries for advanced automation
-- **WebSocket Connections**: Create connections for Puppeteer/Playwright
-- **Health Monitoring**: Check instance health and get metrics
+- **WebSocket Connections**: Build endpoints for Puppeteer/Playwright
+- **Health Monitoring**: Check instance liveness, version and metrics
 - **Session Management**: Monitor active browser sessions
+
+> **Note:** `/export`, `/unblock` and BrowserQL (`/chromium/bql`) are not part of the standard Browserless v2 chromium build and are therefore not exposed by this server.
 
 ## Installation
 
@@ -42,13 +44,58 @@ cp env.example .env
 
 5. Edit `.env` with your Browserless configuration:
 ```bash
+# Either a full base URL (recommended):
+BROWSERLESS_URL=http://localhost:3000
+# ...or host/port/protocol:
 BROWSERLESS_HOST=localhost
 BROWSERLESS_PORT=3000
-BROWSERLESS_TOKEN=your-secure-token-here
 BROWSERLESS_PROTOCOL=http
-BROWSERLESS_TIMEOUT=30000
+
+BROWSERLESS_TOKEN=your-secure-token-here
+BROWSERLESS_TIMEOUT=120000
 BROWSERLESS_CONCURRENT=5
+# Optional: where generated files are written (default: <tmpdir>/browserless-mcp)
+# BROWSERLESS_OUTPUT_DIR=/path/to/output
 ```
+
+When these variables are set, the server auto-initializes on startup, so calling `initialize_browserless` is optional.
+
+## Run directly with `bunx` / `npx`
+
+The package ships an executable (`browserless-mcp`). You can run it straight from
+the Git repository without cloning — ideal for dropping into an image or an MCP
+client config:
+
+```bash
+# from a Git URL
+bunx github:<user>/<repo>
+# or with npx
+npx github:<user>/<repo>
+```
+
+The server reads its configuration from environment variables
+(`BROWSERLESS_URL`, `BROWSERLESS_TOKEN`, ...).
+
+### MCP client configuration (`mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "browserless": {
+      "command": "bunx",
+      "args": ["github:<user>/<repo>"],
+      "env": {
+        "BROWSERLESS_URL": "https://my-browserless.example.com",
+        "BROWSERLESS_TOKEN": "your-token"
+      }
+    }
+  }
+}
+```
+
+> The repo is built automatically on install (the `prepare` script runs `tsc`).
+> For a pinned, build-free install you can also publish to npm and use
+> `"args": ["browserless-mcp"]`.
 
 ## Usage
 
@@ -72,15 +119,14 @@ The server provides the following tools:
 {
   "name": "initialize_browserless",
   "arguments": {
-    "host": "localhost",
-    "port": 3000,
+    "url": "https://my-browserless.example.com",
     "token": "your-token",
-    "protocol": "http",
-    "timeout": 30000,
-    "concurrent": 5
+    "timeout": 120000
   }
 }
 ```
+
+Alternatively, provide `host`/`port`/`protocol` instead of `url`.
 
 #### 2. Generate PDF
 ```json
@@ -161,48 +207,33 @@ The server provides the following tools:
 }
 ```
 
-#### 7. Bypass Bot Detection
+#### 7. Scrape Selectors
 ```json
 {
-  "name": "unblock",
+  "name": "scrape",
   "arguments": {
-    "url": "https://protected-site.com",
-    "content": true,
-    "screenshot": true,
-    "stealth": true,
-    "blockAds": true
+    "url": "https://fill.dev/form/login-simple",
+    "elements": [
+      { "selector": "input" },
+      { "selector": "button" }
+    ],
+    "gotoOptions": { "waitUntil": "domcontentloaded" }
   }
 }
 ```
 
-#### 8. Execute BrowserQL Query
-```json
-{
-  "name": "execute_browserql",
-  "arguments": {
-    "query": "mutation { goto(url: \"https://example.com\") { status } click(selector: \"#button\") { success } screenshot { base64 } }",
-    "variables": {}
-  }
-}
-```
-
-#### 9. Create WebSocket Connection
+#### 8. Create WebSocket Connection
 ```json
 {
   "name": "create_websocket_connection",
   "arguments": {
     "browser": "chromium",
-    "library": "puppeteer",
-    "stealth": true,
-    "viewport": {
-      "width": 1920,
-      "height": 1080
-    }
+    "library": "puppeteer"
   }
 }
 ```
 
-#### 10. Health and Monitoring
+#### 9. Health and Monitoring
 ```json
 {
   "name": "get_health",
@@ -309,12 +340,14 @@ services:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `BROWSERLESS_URL` | — | Full base URL (overrides host/port/protocol) |
 | `BROWSERLESS_HOST` | `localhost` | Browserless host |
 | `BROWSERLESS_PORT` | `3000` | Browserless port |
-| `BROWSERLESS_TOKEN` | Required | Authentication token |
 | `BROWSERLESS_PROTOCOL` | `http` | Protocol (http/https/ws/wss) |
-| `BROWSERLESS_TIMEOUT` | `30000` | Request timeout in ms |
+| `BROWSERLESS_TOKEN` | Required | Authentication token |
+| `BROWSERLESS_TIMEOUT` | `120000` | Request timeout in ms |
 | `BROWSERLESS_CONCURRENT` | `5` | Max concurrent sessions |
+| `BROWSERLESS_OUTPUT_DIR` | `<tmpdir>/browserless-mcp` | Where generated files are written |
 
 ### Browserless Configuration
 

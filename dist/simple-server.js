@@ -1,170 +1,107 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+#!/usr/bin/env node
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import axios from 'axios';
+import dotenv from 'dotenv';
+dotenv.config();
+/**
+ * A minimal Browserless MCP server exposing only the most reliable endpoints
+ * (content + pdf). For the full feature set use index.ts.
+ */
 class SimpleBrowserlessMCPServer {
     server;
     browserlessUrl;
+    token;
     constructor() {
-        this.server = new Server({
-            name: 'browserless-mcp-simple',
-            version: '1.0.0',
-        });
-        this.browserlessUrl = 'http://172.22.0.1:3000';
-        this.setupToolHandlers();
+        this.server = new McpServer({ name: 'browserless-mcp-simple', version: '2.0.0' });
+        const url = process.env.BROWSERLESS_URL;
+        if (url) {
+            this.browserlessUrl = url.replace(/\/+$/, '');
+        }
+        else {
+            const protocol = process.env.BROWSERLESS_PROTOCOL || 'http';
+            const host = process.env.BROWSERLESS_HOST || 'localhost';
+            const port = process.env.BROWSERLESS_PORT || '3000';
+            this.browserlessUrl = `${protocol}://${host}:${port}`;
+        }
+        this.token = process.env.BROWSERLESS_TOKEN;
+        this.registerTools();
     }
-    setupToolHandlers() {
-        this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-            return {
-                tools: [
-                    {
-                        name: 'get_content',
-                        description: 'Extract rendered HTML content from a webpage',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                url: { type: 'string', description: 'URL to extract content from' },
-                                waitForSelector: {
-                                    type: 'object',
-                                    properties: {
-                                        selector: { type: 'string', description: 'CSS selector to wait for' },
-                                        timeout: { type: 'number', description: 'Timeout in milliseconds' },
-                                    },
-                                },
-                            },
-                            required: ['url'],
-                        },
-                    },
-                    {
-                        name: 'generate_pdf',
-                        description: 'Generate PDF from URL with custom styling',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                url: { type: 'string', description: 'URL to convert to PDF' },
-                                options: {
-                                    type: 'object',
-                                    properties: {
-                                        format: { type: 'string', description: 'Paper format (A4, Letter, etc.)' },
-                                        printBackground: { type: 'boolean', description: 'Print background graphics' },
-                                        landscape: { type: 'boolean', description: 'Landscape orientation' },
-                                        margin: {
-                                            type: 'object',
-                                            properties: {
-                                                top: { type: 'string', description: 'Top margin (e.g., "20mm")' },
-                                                bottom: { type: 'string', description: 'Bottom margin' },
-                                                left: { type: 'string', description: 'Left margin' },
-                                                right: { type: 'string', description: 'Right margin' },
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                            required: ['url'],
-                        },
-                    },
-                    {
-                        name: 'test_connection',
-                        description: 'Test connection to Browserless instance',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {},
-                        },
-                    },
-                ],
-            };
-        });
-        this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-            const { name, arguments: args } = request.params;
+    params() {
+        return this.token ? { token: this.token } : {};
+    }
+    registerTools() {
+        this.server.registerTool('get_content', {
+            title: 'Get Content',
+            description: 'Extract rendered HTML content from a webpage',
+            inputSchema: {
+                url: z.string(),
+                waitForSelector: z
+                    .object({ selector: z.string(), timeout: z.number().optional() })
+                    .optional(),
+            },
+            annotations: { readOnlyHint: true },
+        }, async ({ url, waitForSelector }) => {
             try {
-                switch (name) {
-                    case 'get_content': {
-                        if (!args?.url)
-                            throw new Error('URL is required');
-                        const response = await axios.post(`${this.browserlessUrl}/content`, {
-                            url: args.url,
-                            ...(args.waitForSelector ? { waitForSelector: args.waitForSelector } : {}),
-                        }, { timeout: 15000 });
-                        return {
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: `Content extracted successfully from ${args.url}`,
-                                },
-                                {
-                                    type: 'text',
-                                    text: response.data,
-                                },
-                            ],
-                        };
-                    }
-                    case 'generate_pdf': {
-                        if (!args?.url)
-                            throw new Error('URL is required');
-                        const response = await axios.post(`${this.browserlessUrl}/pdf`, {
-                            url: args.url,
-                            options: args.options || {},
-                        }, {
-                            responseType: 'arraybuffer',
-                            timeout: 30000,
-                        });
-                        return {
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: `PDF generated successfully from ${args.url}`,
-                                },
-                                {
-                                    type: 'binary',
-                                    mimeType: 'application/pdf',
-                                    data: Buffer.from(response.data).toString('base64'),
-                                },
-                            ],
-                        };
-                    }
-                    case 'test_connection': {
-                        try {
-                            const response = await axios.get(`${this.browserlessUrl}/config`, { timeout: 5000 });
-                            return {
-                                content: [
-                                    {
-                                        type: 'text',
-                                        text: '✅ Browserless connection successful!',
-                                    },
-                                    {
-                                        type: 'text',
-                                        text: `Configuration: ${JSON.stringify(response.data, null, 2)}`,
-                                    },
-                                ],
-                            };
-                        }
-                        catch (error) {
-                            return {
-                                content: [
-                                    {
-                                        type: 'text',
-                                        text: `❌ Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                                    },
-                                ],
-                            };
-                        }
-                    }
-                    default:
-                        throw new Error(`Unknown tool: ${name}`);
-                }
+                const response = await axios.post(`${this.browserlessUrl}/content`, { url, ...(waitForSelector ? { waitForSelector } : {}) }, { params: this.params(), timeout: 30000, responseType: 'text' });
+                return {
+                    content: [
+                        { type: 'text', text: `Content extracted successfully from ${url}` },
+                        { type: 'text', text: String(response.data) },
+                    ],
+                };
             }
             catch (error) {
-                throw new Error(`Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                return { isError: true, content: [{ type: 'text', text: this.errMsg(error) }] };
+            }
+        });
+        this.server.registerTool('generate_pdf', {
+            title: 'Generate PDF',
+            description: 'Generate a PDF from a URL',
+            inputSchema: {
+                url: z.string(),
+                options: z.record(z.any()).optional(),
+            },
+        }, async ({ url, options }) => {
+            try {
+                const response = await axios.post(`${this.browserlessUrl}/pdf`, { url, options: options || {} }, { params: this.params(), responseType: 'arraybuffer', timeout: 60000 });
+                const buf = Buffer.from(response.data);
+                return {
+                    content: [
+                        { type: 'text', text: `PDF generated successfully from ${url} (${buf.length} bytes, base64 below)` },
+                        { type: 'text', text: buf.toString('base64') },
+                    ],
+                };
+            }
+            catch (error) {
+                return { isError: true, content: [{ type: 'text', text: this.errMsg(error) }] };
+            }
+        });
+        this.server.registerTool('test_connection', { title: 'Test Connection', description: 'Test connection to the Browserless instance', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => {
+            try {
+                const response = await axios.get(`${this.browserlessUrl}/config`, { params: this.params(), timeout: 5000 });
+                return {
+                    content: [
+                        { type: 'text', text: 'Browserless connection successful.' },
+                        { type: 'text', text: `Configuration: ${JSON.stringify(response.data, null, 2)}` },
+                    ],
+                };
+            }
+            catch (error) {
+                return { isError: true, content: [{ type: 'text', text: this.errMsg(error) }] };
             }
         });
     }
-    async run() {
+    errMsg(error) {
+        return `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+    async start() {
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
         console.error('Simple Browserless MCP server started');
     }
 }
-// Start the server
 const server = new SimpleBrowserlessMCPServer();
-server.run().catch(console.error);
+server.start().catch(console.error);
 //# sourceMappingURL=simple-server.js.map

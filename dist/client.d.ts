@@ -1,9 +1,15 @@
-import { BrowserlessConfig, BrowserlessResponse, PdfRequest, PdfResponse, ScreenshotRequest, ScreenshotResponse, ContentRequest, ContentResponse, FunctionRequest, FunctionResponse, DownloadRequest, DownloadResponse, ExportRequest, ExportResponse, PerformanceRequest, PerformanceResponse, UnblockRequest, UnblockResponse, BrowserQLRequest, BrowserQLResponse, WebSocketOptions, WebSocketResponse, HealthResponse, Session } from './types.js';
+import { BrowserlessConfig, BrowserlessResponse, PdfRequest, PdfResponse, ScreenshotRequest, ScreenshotResponse, ContentRequest, ContentResponse, FunctionRequest, FunctionResponse, DownloadRequest, DownloadResponse, ScrapeRequest, ScrapeResponse, PerformanceRequest, PerformanceResponse, WebSocketOptions, WebSocketResponse, HealthResponse, MetaResponse } from './types.js';
 export declare class BrowserlessClient {
     private config;
     private httpClient;
     private baseUrl;
+    private wsBaseUrl;
     constructor(config: BrowserlessConfig);
+    /**
+     * Build the HTTP base URL from either an explicit `url` or host/port/protocol.
+     * A trailing slash is stripped so endpoint paths can be appended cleanly.
+     */
+    private static resolveBaseUrl;
     /**
      * Generate PDF from URL or HTML content
      */
@@ -13,53 +19,63 @@ export declare class BrowserlessClient {
      */
     takeScreenshot(request: ScreenshotRequest): Promise<BrowserlessResponse<ScreenshotResponse>>;
     /**
-     * Extract rendered HTML content from a webpage
+     * Extract rendered HTML content from a webpage.
+     * The /content endpoint returns raw HTML (text/html), not JSON.
      */
     getContent(request: ContentRequest): Promise<BrowserlessResponse<ContentResponse>>;
     /**
-     * Execute custom JavaScript function in browser context
+     * Execute custom JavaScript (puppeteer) code in the browser context.
+     * The body must be JSON: { code, context }. The response is whatever the
+     * function returns, so we decode it based on its content-type.
      */
     executeFunction(request: FunctionRequest): Promise<BrowserlessResponse<FunctionResponse>>;
     /**
-     * Handle file downloads
+     * Run puppeteer code and return any files Chromium downloaded during execution.
+     * Body is JSON: { code, context }. The response is the downloaded file(s).
      */
     downloadFiles(request: DownloadRequest): Promise<BrowserlessResponse<DownloadResponse>>;
     /**
-     * Export webpage with resources
+     * Scrape text/html/attributes from a list of selectors on a page.
      */
-    exportPage(request: ExportRequest): Promise<BrowserlessResponse<ExportResponse>>;
+    scrape(request: ScrapeRequest): Promise<BrowserlessResponse<ScrapeResponse>>;
     /**
-     * Run Lighthouse performance audit
+     * Run a Lighthouse performance audit
      */
     runPerformanceAudit(request: PerformanceRequest): Promise<BrowserlessResponse<PerformanceResponse>>;
     /**
-     * Bypass bot detection and anti-scraping measures
-     */
-    unblock(request: UnblockRequest): Promise<BrowserlessResponse<UnblockResponse>>;
-    /**
-     * Execute BrowserQL GraphQL queries
-     */
-    executeBrowserQL(request: BrowserQLRequest): Promise<BrowserlessResponse<BrowserQLResponse>>;
-    /**
-     * Create WebSocket connection for Puppeteer/Playwright
+     * Build (and verify) a WebSocket endpoint for Puppeteer/Playwright connections.
      */
     createWebSocketConnection(options?: WebSocketOptions): Promise<BrowserlessResponse<WebSocketResponse>>;
     /**
-     * Get health status of Browserless instance
+     * Liveness probe. /active returns 204 when the service is up.
+     */
+    getActive(): Promise<boolean>;
+    /**
+     * System versions (core API version, browser versions, ...).
+     */
+    getMeta(): Promise<BrowserlessResponse<MetaResponse>>;
+    /**
+     * Combined health: liveness (/active) + version metadata (/meta).
      */
     getHealth(): Promise<BrowserlessResponse<HealthResponse>>;
     /**
-     * Get active sessions
+     * Active sessions
      */
-    getSessions(): Promise<BrowserlessResponse<Session[]>>;
+    getSessions(): Promise<BrowserlessResponse<any>>;
     /**
-     * Get configuration
+     * Runtime configuration
      */
     getConfig(): Promise<BrowserlessResponse<any>>;
     /**
-     * Get metrics
+     * Aggregated metrics
      */
     getMetrics(): Promise<BrowserlessResponse<any>>;
+    /**
+     * Decode an arraybuffer response into a string (text) or base64 (binary)
+     * based on the content-type header.
+     */
+    private decodeBody;
+    private extensionForContentType;
     /**
      * Handle errors from API calls
      */
