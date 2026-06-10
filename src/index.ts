@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -350,12 +354,157 @@ class BrowserlessMCPServer {
     );
   }
 
-  async start() {
+  /** Expose the underlying MCP server so it can be wired to any transport. */
+  getServer(): McpServer {
+    return this.server;
+  }
+
+  /** Start the server over stdio (one process = one session). */
+  async startStdio() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('Browserless MCP server started');
+    console.error('Browserless MCP server started (stdio)');
   }
 }
 
-const server = new BrowserlessMCPServer();
-server.start().catch(console.error);
+/** Read and JSON-parse an HTTP request body. Resolves `undefined` when empty. */
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      if (!raw) {
+        resolve(undefined);
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Start the server over Streamable HTTP, exposing the MCP endpoint at `path`.
+ * Sessions are tracked by the `mcp-session-id` header so multiple clients can
+ * connect concurrently, each backed by its own MCP server instance.
+ */
+async function startHttp() {
+  const host = process.env.MCP_HTTP_HOST || '0.0.0.0';
+  const port = Number(process.env.MCP_HTTP_PORT || process.env.PORT || 3000);
+  const mcpPath = process.env.MCP_HTTP_PATH || '/mcp';
+  const authToken = process.env.MCP_AUTH_TOKEN || '';
+
+  /** Return 401 if the request lacks a valid Bearer token (when authToken is set). */
+  function requireAuth(req: IncomingMessage, res: ServerResponse): boolean {
+    if (!authToken) return true;
+    const header = req.headers['authorization'] as string | undefined;
+    if (header && header === `Bearer ${authToken}`) return true;
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return false;
+  }
+
+  const transports: Record<string, StreamableHTTPServerTransport> = {};
+
+  const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+
+      if (!requireAuth(req, res)) return;
+
+      if (req.method === 'GET' && url.pathname === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', name: 'browserless-mcp', transport: 'http' }));
+        return;
+      }
+
+      if (url.pathname !== mcpPath) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not Found' }));
+        return;
+      }
+
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        let transport = sessionId ? transports[sessionId] : undefined;
+
+        if (!transport) {
+          if (isInitializeRequest(body)) {
+            transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: () => randomUUID(),
+              onsessioninitialized: (sid) => {
+                transports[sid] = transport!;
+              },
+            });
+            transport.onclose = () => {
+              const sid = transport!.sessionId;
+              if (sid) delete transports[sid];
+            };
+            const mcp = new BrowserlessMCPServer();
+            await mcp.getServer().connect(transport);
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+                id: null,
+              })
+            );
+            return;
+          }
+        }
+
+        await transport.handleRequest(req, res, body);
+        return;
+      }
+
+      if (req.method === 'GET' || req.method === 'DELETE') {
+        const transport = sessionId ? transports[sessionId] : undefined;
+        if (!transport) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid or missing session ID' }));
+          return;
+        }
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      res.writeHead(405, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+    } catch (error) {
+      console.error('Error handling MCP request:', error);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null,
+          })
+        );
+      }
+    }
+  });
+
+  httpServer.listen(port, host, () => {
+    console.error(`Browserless MCP server started (http) on http://${host}:${port}${mcpPath}`);
+  });
+}
+
+const useStdio = process.argv.slice(2).some((arg) => arg === 'stdio' || arg === '--stdio');
+
+if (useStdio) {
+  const server = new BrowserlessMCPServer();
+  server.startStdio().catch(console.error);
+} else {
+  startHttp().catch(console.error);
+}

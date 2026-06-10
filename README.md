@@ -99,15 +99,57 @@ The server reads its configuration from environment variables
 
 ## Usage
 
-### Starting the MCP Server
+### Transports (HTTP by default, stdio opt-in)
+
+The server runs in **Streamable HTTP** mode by default, exposing the MCP
+endpoint at **`/mcp`** (plus a `GET /health` probe). Pass `stdio` as a CLI
+argument to switch to the classic **stdio** transport (for local MCP clients
+that spawn the process).
 
 ```bash
+# HTTP mode (default) — listens on http://0.0.0.0:3000/mcp
 npm start
+# equivalently
+npm run start:http
+
+# stdio mode
+npm run start:stdio
+# equivalently
+node dist/index.js stdio
 ```
 
-Or for development:
+For development with live reload:
 ```bash
-npm run dev
+npm run dev          # HTTP
+npm run dev:stdio    # stdio
+```
+
+The HTTP transport is session-aware: each client gets an `mcp-session-id`
+header on `initialize`, then reuses it for subsequent `POST`/`GET`/`DELETE`
+requests to `/mcp`. Configure it with `MCP_HTTP_HOST` (default `0.0.0.0`),
+`MCP_HTTP_PORT` (default `3000`, also honours `PORT`) and `MCP_HTTP_PATH`
+(default `/mcp`).
+
+To protect the HTTP endpoint with a Bearer token, set `MCP_AUTH_TOKEN`
+in your environment. When set, all requests to `/mcp` and `/health` must
+include `Authorization: Bearer <token>`. Leave it unset (default) for no auth.
+
+> **Note:** DNS rebinding protection is not enabled; bind to `127.0.0.1` or put
+> the server behind a reverse proxy / firewall if it must not be public.
+
+#### HTTP MCP client configuration (`mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "browserless": {
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer your-mcp-token"
+      }
+    }
+  }
+}
 ```
 
 ### Using with MCP Clients
@@ -378,6 +420,10 @@ services:
 | `BROWSERLESS_TIMEOUT` | `120000` | Request timeout in ms |
 | `BROWSERLESS_CONCURRENT` | `5` | Max concurrent sessions |
 | `BROWSERLESS_OUTPUT_DIR` | `<tmpdir>/browserless-mcp` | Where generated files are written |
+| `MCP_HTTP_HOST` | `0.0.0.0` | Host the HTTP transport binds to |
+| `MCP_HTTP_PORT` | `3000` | Port for the HTTP transport (also honours `PORT`) |
+| `MCP_HTTP_PATH` | `/mcp` | Path of the MCP HTTP endpoint |
+| `MCP_AUTH_TOKEN` | — | Bearer token to protect HTTP endpoints (empty = pas d'auth) |
 
 ### Browserless Configuration
 
