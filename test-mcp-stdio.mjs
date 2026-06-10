@@ -2,11 +2,12 @@
 // layer end-to-end: auto-init from env, tools/list, and a few tools/call.
 import { spawn } from 'child_process';
 
-const env = {
-  ...process.env,
-  BROWSERLESS_URL: process.env.BROWSERLESS_URL || 'http://xxx.io',
-  BROWSERLESS_TOKEN: process.env.BROWSERLESS_TOKEN || 'xxx',
-};
+if (!process.env.BROWSERLESS_URL || !process.env.BROWSERLESS_TOKEN) {
+  console.error('Set BROWSERLESS_URL and BROWSERLESS_TOKEN environment variables first.');
+  process.exit(2);
+}
+
+const env = { ...process.env };
 
 const child = spawn('node', ['dist/index.js'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
 

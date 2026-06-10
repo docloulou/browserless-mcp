@@ -2,13 +2,16 @@
 // exercising every feature on https://fill.dev/.
 //
 // Usage:
-//   BROWSERLESS_URL=... BROWSERLESS_TOKEN=... node test-fill-dev.mjs
-//
-// Defaults target the instance provided for this task.
+//   BROWSERLESS_URL=https://your-instance BROWSERLESS_TOKEN=your-token node test-fill-dev.mjs
 import { BrowserlessClient } from './dist/client.js';
 
-const url = process.env.BROWSERLESS_URL || 'http://xxx.io';
-const token = process.env.BROWSERLESS_TOKEN || 'xxx';
+const url = process.env.BROWSERLESS_URL;
+const token = process.env.BROWSERLESS_TOKEN;
+
+if (!url || !token) {
+  console.error('Set BROWSERLESS_URL and BROWSERLESS_TOKEN environment variables first.');
+  process.exit(2);
+}
 
 const client = new BrowserlessClient({
   url,
@@ -18,6 +21,7 @@ const client = new BrowserlessClient({
   protocol: 'http',
   timeout: 120000,
   concurrent: 5,
+  retries: 2,
 });
 
 const FILL = 'https://fill.dev';
