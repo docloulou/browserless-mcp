@@ -10,6 +10,9 @@ export const BrowserlessConfigSchema = z.object({
     protocol: z.enum(['http', 'https', 'ws', 'wss']).default('http'),
     timeout: z.number().default(120000),
     concurrent: z.number().default(5),
+    // Number of automatic retries on transient failures (browser launch crashes,
+    // 5xx, network resets). Set to 0 to disable.
+    retries: z.number().default(2),
 });
 // PDF generation options
 export const PdfOptionsSchema = z.object({
@@ -96,8 +99,19 @@ export const GotoOptionsSchema = z.object({
     timeout: z.number().optional(),
     referer: z.string().optional(),
 }).passthrough();
+// Browserless query-string options shared by most REST endpoints.
+// These are sent as query parameters, not in the JSON body.
+//  - launch: CDP/puppeteer launch options (e.g. { args: ["--disable-dev-shm-usage"] })
+//  - blockAds: load an ad-blocker for the session
+//  - timeout: override the per-request server timeout (ms)
+export const queryOptionsShape = {
+    launch: z.union([z.record(z.any()), z.string()]).optional(),
+    blockAds: z.boolean().optional(),
+    timeout: z.number().optional(),
+};
 // PDF request schema
 export const PdfRequestSchema = z.object({
+    ...queryOptionsShape,
     url: z.string().optional(),
     html: z.string().optional(),
     options: PdfOptionsSchema.optional(),
@@ -115,6 +129,7 @@ export const PdfRequestSchema = z.object({
 });
 // Screenshot request schema
 export const ScreenshotRequestSchema = z.object({
+    ...queryOptionsShape,
     url: z.string().optional(),
     html: z.string().optional(),
     options: ScreenshotOptionsSchema.optional(),
@@ -133,6 +148,7 @@ export const ScreenshotRequestSchema = z.object({
 });
 // Content request schema
 export const ContentRequestSchema = z.object({
+    ...queryOptionsShape,
     url: z.string().optional(),
     html: z.string().optional(),
     gotoOptions: GotoOptionsSchema.optional(),
@@ -148,11 +164,13 @@ export const ContentRequestSchema = z.object({
 });
 // Function request schema (sent as application/json: { code, context })
 export const FunctionRequestSchema = z.object({
+    ...queryOptionsShape,
     code: z.string(),
     context: z.record(z.any()).optional(),
 });
 // Download request schema (same shape as function)
 export const DownloadRequestSchema = z.object({
+    ...queryOptionsShape,
     code: z.string(),
     context: z.record(z.any()).optional(),
 });
@@ -162,6 +180,7 @@ export const ScrapeElementSchema = z.object({
     timeout: z.number().optional(),
 });
 export const ScrapeRequestSchema = z.object({
+    ...queryOptionsShape,
     url: z.string().optional(),
     html: z.string().optional(),
     elements: z.array(ScrapeElementSchema),

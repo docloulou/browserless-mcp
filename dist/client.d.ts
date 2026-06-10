@@ -11,6 +11,20 @@ export declare class BrowserlessClient {
      */
     private static resolveBaseUrl;
     /**
+     * Split a request into a JSON body and Browserless query parameters
+     * (launch / blockAds / timeout are sent as query params, not in the body).
+     */
+    private extractQuery;
+    /**
+     * Whether a failed request is worth retrying (transient server/launch issues).
+     */
+    private isRetryable;
+    /**
+     * POST with automatic retries on transient failures (browser launch crashes,
+     * 5xx, network resets), using a small linear backoff.
+     */
+    private postWithRetry;
+    /**
      * Generate PDF from URL or HTML content
      */
     generatePdf(request: PdfRequest): Promise<BrowserlessResponse<PdfResponse>>;
@@ -76,6 +90,11 @@ export declare class BrowserlessClient {
      */
     private decodeBody;
     private extensionForContentType;
+    /**
+     * Extract a human-readable message from an axios error, decoding string,
+     * Buffer, ArrayBuffer and JSON error bodies.
+     */
+    private errorText;
     /**
      * Handle errors from API calls
      */

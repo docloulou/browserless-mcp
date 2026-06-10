@@ -34,13 +34,68 @@ export class BrowserlessClient {
         return `${protocol}://${config.host}:${config.port}`;
     }
     /**
+     * Split a request into a JSON body and Browserless query parameters
+     * (launch / blockAds / timeout are sent as query params, not in the body).
+     */
+    extractQuery(request) {
+        const { launch, blockAds, timeout, ...body } = request || {};
+        const params = {};
+        if (launch !== undefined)
+            params.launch = typeof launch === 'string' ? launch : JSON.stringify(launch);
+        if (blockAds !== undefined)
+            params.blockAds = blockAds;
+        if (timeout !== undefined)
+            params.timeout = timeout;
+        return { body, params };
+    }
+    /**
+     * Whether a failed request is worth retrying (transient server/launch issues).
+     */
+    isRetryable(error) {
+        if (!axios.isAxiosError(error))
+            return false;
+        if (!error.response)
+            return true; // network error / reset / client timeout
+        const status = error.response.status;
+        if ([408, 425, 429, 500, 502, 503, 504].includes(status))
+            return true;
+        const msg = this.errorText(error).toLowerCase();
+        return (msg.includes('failed to launch') ||
+            msg.includes('session closed') ||
+            msg.includes('target closed') ||
+            msg.includes('socket hang up') ||
+            msg.includes('protocol error'));
+    }
+    /**
+     * POST with automatic retries on transient failures (browser launch crashes,
+     * 5xx, network resets), using a small linear backoff.
+     */
+    async postWithRetry(path, body, config) {
+        let lastError;
+        const maxRetries = Math.max(0, this.config.retries ?? 0);
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                return await this.httpClient.post(path, body, config);
+            }
+            catch (error) {
+                lastError = error;
+                if (attempt >= maxRetries || !this.isRetryable(error))
+                    break;
+                await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+            }
+        }
+        throw lastError;
+    }
+    /**
      * Generate PDF from URL or HTML content
      */
     async generatePdf(request) {
         try {
-            const response = await this.httpClient.post('/pdf', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/pdf', body, {
                 responseType: 'arraybuffer',
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             return {
                 success: true,
@@ -59,9 +114,11 @@ export class BrowserlessClient {
      */
     async takeScreenshot(request) {
         try {
-            const response = await this.httpClient.post('/screenshot', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/screenshot', body, {
                 responseType: 'arraybuffer',
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             const format = request.options?.type || 'png';
             const filename = `screenshot-${Date.now()}.${format}`;
@@ -84,9 +141,11 @@ export class BrowserlessClient {
      */
     async getContent(request) {
         try {
-            const response = await this.httpClient.post('/content', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/content', body, {
                 responseType: 'text',
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             const html = typeof response.data === 'string' ? response.data : String(response.data);
             const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -110,9 +169,11 @@ export class BrowserlessClient {
      */
     async executeFunction(request) {
         try {
-            const response = await this.httpClient.post('/function', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/function', body, {
                 responseType: 'arraybuffer',
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             return {
                 success: true,
@@ -129,9 +190,11 @@ export class BrowserlessClient {
      */
     async downloadFiles(request) {
         try {
-            const response = await this.httpClient.post('/download', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/download', body, {
                 responseType: 'arraybuffer',
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             const contentType = response.headers['content-type'] || 'application/octet-stream';
             return {
@@ -152,8 +215,10 @@ export class BrowserlessClient {
      */
     async scrape(request) {
         try {
-            const response = await this.httpClient.post('/scrape', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/scrape', body, {
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             return {
                 success: true,
@@ -169,8 +234,10 @@ export class BrowserlessClient {
      */
     async runPerformanceAudit(request) {
         try {
-            const response = await this.httpClient.post('/performance', request, {
+            const { body, params } = this.extractQuery(request);
+            const response = await this.postWithRetry('/performance', body, {
                 headers: { 'Content-Type': 'application/json' },
+                params,
             });
             return {
                 success: true,
@@ -340,35 +407,39 @@ export class BrowserlessClient {
         return '.bin';
     }
     /**
+     * Extract a human-readable message from an axios error, decoding string,
+     * Buffer, ArrayBuffer and JSON error bodies.
+     */
+    errorText(error) {
+        if (!axios.isAxiosError(error)) {
+            return error instanceof Error ? error.message : 'Unknown error occurred';
+        }
+        let message = error.message;
+        const data = error.response?.data;
+        if (data) {
+            if (typeof data === 'string') {
+                message = data;
+            }
+            else if (Buffer.isBuffer(data)) {
+                message = data.toString('utf-8') || message;
+            }
+            else if (data instanceof ArrayBuffer) {
+                message = Buffer.from(data).toString('utf-8') || message;
+            }
+            else if (typeof data === 'object') {
+                message = data.message || data.error || JSON.stringify(data);
+            }
+        }
+        return message;
+    }
+    /**
      * Handle errors from API calls
      */
     handleError(error) {
-        if (axios.isAxiosError(error)) {
-            let message = error.message;
-            const data = error.response?.data;
-            if (data) {
-                if (typeof data === 'string') {
-                    message = data;
-                }
-                else if (Buffer.isBuffer(data)) {
-                    message = data.toString('utf-8') || message;
-                }
-                else if (data instanceof ArrayBuffer) {
-                    message = Buffer.from(data).toString('utf-8') || message;
-                }
-                else if (typeof data === 'object') {
-                    message = data.message || data.error || JSON.stringify(data);
-                }
-            }
-            return {
-                success: false,
-                error: message,
-                statusCode: error.response?.status,
-            };
-        }
         return {
             success: false,
-            error: error instanceof Error ? error.message : 'Unknown error occurred',
+            error: this.errorText(error),
+            statusCode: axios.isAxiosError(error) ? error.response?.status : undefined,
         };
     }
     /**

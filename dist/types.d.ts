@@ -7,6 +7,7 @@ export declare const BrowserlessConfigSchema: z.ZodObject<{
     protocol: z.ZodDefault<z.ZodEnum<["http", "https", "ws", "wss"]>>;
     timeout: z.ZodDefault<z.ZodNumber>;
     concurrent: z.ZodDefault<z.ZodNumber>;
+    retries: z.ZodDefault<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     host: string;
     port: number;
@@ -14,6 +15,7 @@ export declare const BrowserlessConfigSchema: z.ZodObject<{
     protocol: "http" | "https" | "ws" | "wss";
     timeout: number;
     concurrent: number;
+    retries: number;
     url?: string | undefined;
 }, {
     token: string;
@@ -23,6 +25,7 @@ export declare const BrowserlessConfigSchema: z.ZodObject<{
     protocol?: "http" | "https" | "ws" | "wss" | undefined;
     timeout?: number | undefined;
     concurrent?: number | undefined;
+    retries?: number | undefined;
 }>;
 export type BrowserlessConfig = z.infer<typeof BrowserlessConfigSchema>;
 export declare const PdfOptionsSchema: z.ZodObject<{
@@ -262,6 +265,11 @@ export declare const GotoOptionsSchema: z.ZodObject<{
     timeout: z.ZodOptional<z.ZodNumber>;
     referer: z.ZodOptional<z.ZodString>;
 }, z.ZodTypeAny, "passthrough">>;
+export declare const queryOptionsShape: {
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
+};
 export declare const PdfRequestSchema: z.ZodObject<{
     url: z.ZodOptional<z.ZodString>;
     html: z.ZodOptional<z.ZodString>;
@@ -455,8 +463,12 @@ export declare const PdfRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     }>>;
     waitForTimeout: z.ZodOptional<z.ZodNumber>;
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     url?: string | undefined;
+    timeout?: number | undefined;
     options?: {
         displayHeaderFooter?: boolean | undefined;
         printBackground?: boolean | undefined;
@@ -526,8 +538,11 @@ export declare const PdfRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
 }, {
     url?: string | undefined;
+    timeout?: number | undefined;
     options?: {
         displayHeaderFooter?: boolean | undefined;
         printBackground?: boolean | undefined;
@@ -597,6 +612,8 @@ export declare const PdfRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
 }>;
 export type PdfRequest = z.infer<typeof PdfRequestSchema>;
 export declare const ScreenshotRequestSchema: z.ZodObject<{
@@ -763,8 +780,12 @@ export declare const ScreenshotRequestSchema: z.ZodObject<{
         polling?: string | number | undefined;
     }>>;
     waitForTimeout: z.ZodOptional<z.ZodNumber>;
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     url?: string | undefined;
+    timeout?: number | undefined;
     options?: {
         type?: "png" | "jpeg" | "webp" | undefined;
         quality?: number | undefined;
@@ -824,9 +845,12 @@ export declare const ScreenshotRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     scrollPage?: boolean | undefined;
 }, {
     url?: string | undefined;
+    timeout?: number | undefined;
     options?: {
         type?: "png" | "jpeg" | "webp" | undefined;
         quality?: number | undefined;
@@ -886,6 +910,8 @@ export declare const ScreenshotRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     scrollPage?: boolean | undefined;
 }>;
 export type ScreenshotRequest = z.infer<typeof ScreenshotRequestSchema>;
@@ -998,8 +1024,12 @@ export declare const ContentRequestSchema: z.ZodObject<{
     }>>;
     emulateMediaType: z.ZodOptional<z.ZodString>;
     bestAttempt: z.ZodOptional<z.ZodBoolean>;
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     url?: string | undefined;
+    timeout?: number | undefined;
     html?: string | undefined;
     addScriptTag?: {
         url?: string | undefined;
@@ -1042,9 +1072,12 @@ export declare const ContentRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     bestAttempt?: boolean | undefined;
 }, {
     url?: string | undefined;
+    timeout?: number | undefined;
     html?: string | undefined;
     addScriptTag?: {
         url?: string | undefined;
@@ -1087,28 +1120,48 @@ export declare const ContentRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     bestAttempt?: boolean | undefined;
 }>;
 export type ContentRequest = z.infer<typeof ContentRequestSchema>;
 export declare const FunctionRequestSchema: z.ZodObject<{
     code: z.ZodString;
     context: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     code: string;
+    timeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     context?: Record<string, any> | undefined;
 }, {
     code: string;
+    timeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     context?: Record<string, any> | undefined;
 }>;
 export type FunctionRequest = z.infer<typeof FunctionRequestSchema>;
 export declare const DownloadRequestSchema: z.ZodObject<{
     code: z.ZodString;
     context: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     code: string;
+    timeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     context?: Record<string, any> | undefined;
 }, {
     code: string;
+    timeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     context?: Record<string, any> | undefined;
 }>;
 export type DownloadRequest = z.infer<typeof DownloadRequestSchema>;
@@ -1185,12 +1238,16 @@ export declare const ScrapeRequestSchema: z.ZodObject<{
         screenshot?: boolean | undefined;
     }>>;
     bestAttempt: z.ZodOptional<z.ZodBoolean>;
+    launch: z.ZodOptional<z.ZodUnion<[z.ZodRecord<z.ZodString, z.ZodAny>, z.ZodString]>>;
+    blockAds: z.ZodOptional<z.ZodBoolean>;
+    timeout: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     elements: {
         selector: string;
         timeout?: number | undefined;
     }[];
     url?: string | undefined;
+    timeout?: number | undefined;
     html?: string | undefined;
     gotoOptions?: z.objectOutputType<{
         waitUntil: z.ZodOptional<z.ZodString>;
@@ -1204,6 +1261,8 @@ export declare const ScrapeRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     bestAttempt?: boolean | undefined;
     debugOpts?: {
         html?: boolean | undefined;
@@ -1218,6 +1277,7 @@ export declare const ScrapeRequestSchema: z.ZodObject<{
         timeout?: number | undefined;
     }[];
     url?: string | undefined;
+    timeout?: number | undefined;
     html?: string | undefined;
     gotoOptions?: z.objectInputType<{
         waitUntil: z.ZodOptional<z.ZodString>;
@@ -1231,6 +1291,8 @@ export declare const ScrapeRequestSchema: z.ZodObject<{
         hidden?: boolean | undefined;
     } | undefined;
     waitForTimeout?: number | undefined;
+    launch?: string | Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     bestAttempt?: boolean | undefined;
     debugOpts?: {
         html?: boolean | undefined;
@@ -1275,13 +1337,13 @@ export declare const WebSocketOptionsSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     browser: "chromium" | "firefox" | "webkit";
     library: "puppeteer" | "playwright";
-    blockAds?: boolean | undefined;
     launch?: Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
 }, {
+    launch?: Record<string, any> | undefined;
+    blockAds?: boolean | undefined;
     browser?: "chromium" | "firefox" | "webkit" | undefined;
     library?: "puppeteer" | "playwright" | undefined;
-    blockAds?: boolean | undefined;
-    launch?: Record<string, any> | undefined;
 }>;
 export type WebSocketOptions = z.infer<typeof WebSocketOptionsSchema>;
 export interface BrowserlessResponse<T = any> {

@@ -66,6 +66,7 @@ class BrowserlessMCPServer {
         protocol: process.env.BROWSERLESS_PROTOCOL || undefined,
         timeout: process.env.BROWSERLESS_TIMEOUT ? Number(process.env.BROWSERLESS_TIMEOUT) : undefined,
         concurrent: process.env.BROWSERLESS_CONCURRENT ? Number(process.env.BROWSERLESS_CONCURRENT) : undefined,
+        retries: process.env.BROWSERLESS_RETRIES ? Number(process.env.BROWSERLESS_RETRIES) : undefined,
       });
       this.client = new BrowserlessClient(config);
     } catch (error) {
