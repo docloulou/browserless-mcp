@@ -5,6 +5,8 @@ import { z } from 'zod';
 import axios from 'axios';
 import dotenv from 'dotenv';
 dotenv.config();
+const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
+axios.defaults.headers.common['User-Agent'] = DEFAULT_USER_AGENT;
 /**
  * A minimal Browserless MCP server exposing only the most reliable endpoints
  * (content + pdf). For the full feature set use index.ts.

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { WebSocket } from 'ws';
+const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 export class BrowserlessClient {
     config;
     httpClient;
@@ -15,6 +16,7 @@ export class BrowserlessClient {
             // Browserless treats any 2xx (including 204) as success. 4xx/5xx should reject.
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
+            headers: { 'User-Agent': DEFAULT_USER_AGENT },
         });
         // Authenticate every request with the token as a query parameter.
         this.httpClient.interceptors.request.use((cfg) => {
