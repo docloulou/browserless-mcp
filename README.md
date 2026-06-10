@@ -255,6 +255,36 @@ Alternatively, provide `host`/`port`/`protocol` instead of `url`.
 }
 ```
 
+## Per-call options & resilience
+
+The browser-driving tools (`get_content`, `take_screenshot`, `generate_pdf`,
+`execute_function`, `download_files`, `scrape`) accept these optional fields,
+sent as Browserless query parameters:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `launch` | object/string | Chromium launch options, e.g. `{ "args": ["--no-sandbox", "--disable-dev-shm-usage"] }` |
+| `blockAds` | boolean | Load an ad-blocker for the session |
+| `timeout` | number | Override the per-request server timeout (ms) |
+
+`--disable-dev-shm-usage` is the usual fix when the remote Chromium crashes with
+*"Failed to launch the browser process"* (small `/dev/shm` in containers).
+
+The client also **retries transient failures** automatically (browser launch
+crashes, 5xx, connection resets) — controlled by `BROWSERLESS_RETRIES`
+(default `2`).
+
+### Writing `execute_function` code (Puppeteer 25)
+
+The remote runs **Puppeteer 25**, so keep this in mind:
+
+- `page.waitForTimeout(...)` was **removed** — use `await new Promise(r => setTimeout(r, ms))`.
+- `page.$('button:has-text("Accept")')` is **Playwright** syntax — Puppeteer uses
+  plain CSS selectors (or `page.$$eval` to filter by text).
+- To return an image/PDF, **don't** screenshot inside a function (a returned
+  `Uint8Array` gets JSON-serialized). Use the dedicated `take_screenshot` /
+  `generate_pdf` tools, or return base64 text and decode it yourself.
+
 ## Browserless Setup
 
 ### Docker Setup
